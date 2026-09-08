@@ -1,0 +1,25 @@
+{
+  "name": "layer_review_queue_reason",
+  "source_schema": "layer.schema.json#/$defs/review_item/properties/queue_reason",
+  "description": "Reason a finding entered the layer disposition review queue.",
+  "values": [
+    "ambiguous_statement",
+    "unverified_identity",
+    "insufficient_authority",
+    "no_finding_id",
+    "undetermined_finding",
+    "fp_audit_valve",
+    "needs_manual_test",
+    "stale_baseline",
+    "rebaseline_mapping",
+    "rebaseline_unmatched",
+    "unsound_refutation",
+    "weak_confirmation",
+    "ungraded_confirmation",
+    "severity_proposal",
+    "needs_identity"
+  ],
+  "used_in_schemas": [
+    "layer.schema.json"
+  ]
+}

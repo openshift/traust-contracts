@@ -1,0 +1,22 @@
+{
+  "name": "triage_queue_reason",
+  "source_schema": "",
+  "description": "Forward vocabulary for triage/remediation queue reasons. Not yet bound in triage.schema.json.",
+  "values": [
+    "new_discovery",
+    "severity_upgrade",
+    "regression_detected",
+    "evidence_available",
+    "remediation_ready",
+    "remediation_due",
+    "false_positive_dispute",
+    "scope_change",
+    "revalidation_required",
+    "sla_escalation",
+    "manual_queue",
+    "dependency_update",
+    "patch_available",
+    "analyst_review"
+  ],
+  "used_in_schemas": []
+}

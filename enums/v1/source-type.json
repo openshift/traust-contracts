@@ -1,0 +1,20 @@
+{
+  "name": "source_type",
+  "source_schema": "layer.schema.json#/$defs/source_type",
+  "description": "Event source type classifying evidence origin. Evidence classes for validity precedence: validation_report/verification_report/fuzz_report are execution-verified (class 1), human static (class 2), machine static incl. triage_report/impact_report/vuln_scan_report (class 3).",
+  "values": [
+    "mr_comment",
+    "commit",
+    "jira",
+    "interactive",
+    "validation_report",
+    "verification_report",
+    "triage_report",
+    "impact_report",
+    "vuln_scan_report",
+    "fuzz_report"
+  ],
+  "used_in_schemas": [
+    "layer.schema.json"
+  ]
+}

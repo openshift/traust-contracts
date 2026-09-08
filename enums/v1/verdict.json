@@ -1,0 +1,16 @@
+{
+  "name": "verdict",
+  "source_schema": "triage.schema.json#/$defs/verdict",
+  "description": "Triage finding verdict taxonomy.",
+  "values": [
+    "true_positive",
+    "hardening",
+    "undetermined",
+    "false_positive",
+    "duplicate"
+  ],
+  "used_in_schemas": [
+    "triage.schema.json",
+    "verification.schema.json"
+  ]
+}

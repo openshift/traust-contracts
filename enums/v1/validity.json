@@ -1,0 +1,16 @@
+{
+  "name": "validity",
+  "source_schema": "cloud-config-findings-current.schema.json#/properties/findings/items/properties/disposition/properties/validity",
+  "description": "Finding validity disposition state. Indicates whether a finding is confirmed, false positive, etc.",
+  "values": [
+    "confirmed",
+    "corrected",
+    "false_positive",
+    "not_verified",
+    "hardening"
+  ],
+  "note": "cloud-config-findings-current.schema.json uses these 5 values; compliance-assessment.schema.json uses a different 4-value set (satisfied, not_satisfied, not_applicable, not_assessed) in its verdict field",
+  "used_in_schemas": [
+    "cloud-config-findings-current.schema.json"
+  ]
+}

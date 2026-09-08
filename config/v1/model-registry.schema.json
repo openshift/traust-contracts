@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/traust-contracts/schemas/v1/model-registry.schema.json",
+  "title": "Model Registry",
+  "description": "Schema for config/model-registry.yaml \u2014 the single source of vendor/model identifiers and role routing policy (multi-model-strategy-plan M0).",
+  "type": "object",
+  "required": [
+    "version",
+    "updated",
+    "tiers",
+    "providers",
+    "roles"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "updated": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "tiers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "description"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "data_handling",
+          "models"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data_handling": {
+            "type": "string",
+            "minLength": 4
+          },
+          "models": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "tier",
+                "batch_eligible"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string"
+                },
+                "batch_eligible": {
+                  "type": "boolean"
+                },
+                "price_per_mtok_in": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "price_per_mtok_out": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "floor",
+          "approved",
+          "candidates",
+          "ledger_validity_writer"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "floor": {
+            "type": "string"
+          },
+          "approved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ledger_validity_writer": {
+            "type": "boolean"
+          },
+          "claude_code_only": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "evals": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "benchmarked_on": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recall_delta": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "consistency": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

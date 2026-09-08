@@ -1,0 +1,15 @@
+{
+  "name": "validation_verdict",
+  "source_schema": "validation.schema.json#/$defs/verdict",
+  "description": "Validation step/finding verdict.",
+  "values": [
+    "confirmed",
+    "refuted",
+    "inconclusive",
+    "blocked_by_scope",
+    "not_attempted"
+  ],
+  "used_in_schemas": [
+    "validation.schema.json"
+  ]
+}

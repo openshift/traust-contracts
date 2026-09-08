@@ -1,0 +1,80 @@
+{
+  "$id": "https://example.com/traust-contracts/schemas/v1/adapter-result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adapter Scan Result",
+  "description": "Common typed output of engine-lib scanner adapters (scan() return value). Distinct from vuln-findings.schema.json ScanResult which is skill-level output with repo_slug, baseline, etc.",
+  "type": "object",
+  "required": [
+    "target",
+    "scanned_at",
+    "metadata",
+    "findings"
+  ],
+  "properties": {
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scanned_at": {
+      "type": "string",
+      "minLength": 10
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "report.schema.json#/$defs/finding"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "focus_areas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "tool"
+      ],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scanner_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_severity": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "severity",
+  "source_schema": "report.schema.json#/$defs/severity_level",
+  "description": "Finding severity classification. Used across finding schemas (report, vuln-findings, cloud-config-audit, remediation, validation, etc.)",
+  "values": [
+    "critical",
+    "high",
+    "medium",
+    "low",
+    "informational"
+  ],
+  "used_in_schemas": [
+    "report.schema.json",
+    "vuln-findings.schema.json",
+    "cloud-config-audit.schema.json",
+    "cloud-config-findings-current.schema.json",
+    "remediation.schema.json",
+    "validation.schema.json",
+    "layer.schema.json",
+    "isolation-review.schema.json",
+    "pqc-blockers.schema.json",
+    "sla-policy.schema.json",
+    "triage.schema.json",
+    "benchmark-target.schema.json"
+  ]
+}
