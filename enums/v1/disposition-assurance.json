@@ -1,0 +1,14 @@
+{
+  "name": "disposition_assurance",
+  "source_schema": "cloud-config-findings-current.schema.json#/properties/findings/items/properties/disposition/properties/assurance",
+  "description": "Level of confidence in a disposition. Indicates how a status was verified.",
+  "values": [
+    "execution_proven",
+    "human_reviewed",
+    "machine_verified",
+    "claimed"
+  ],
+  "used_in_schemas": [
+    "cloud-config-findings-current.schema.json"
+  ]
+}

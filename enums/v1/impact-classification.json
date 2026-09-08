@@ -1,0 +1,16 @@
+{
+  "name": "impact_classification",
+  "source_schema": "impact-analysis.schema.json#/$defs/classification",
+  "description": "Impact analysis repo classification.",
+  "values": [
+    "affected",
+    "likely_affected",
+    "not_observed",
+    "version_not_in_range",
+    "not_imported",
+    "inconclusive"
+  ],
+  "used_in_schemas": [
+    "impact-analysis.schema.json"
+  ]
+}

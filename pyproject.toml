@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traust-contracts"
+version = "1.2.2"
+license = "Apache-2.0"
+description = "Contract surface for the AI security ledger ecosystem: schemas and shared enums"
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.0", "pydantic>=2.0", "pyyaml>=6.0"]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.6", "vulture>=2.16"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/traust_contracts"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/.ci-venv", "/.venv"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas/v1" = "traust_contracts/schemas/v1"
+"config/v1" = "traust_contracts/config/v1"
+"enums/v1" = "traust_contracts/enums/v1"
+
+[tool.hatch.build]
+artifacts = ["schemas/v1/**", "config/v1/**", "enums/v1/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Deliberately strict: this repo is small, public-bound, and human-reviewed.
+select = [
+    "E",
+    "W",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "PTH", # use pathlib
+    "RUF", # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]

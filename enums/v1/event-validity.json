@@ -1,0 +1,15 @@
+{
+  "name": "event_validity",
+  "source_schema": "layer.schema.json#/$defs/validity",
+  "description": "Finding validity for disposition events. 4-value set (not_verified is the audit-stage default and is never set by an event). 'hardening' = defense-in-depth gap with no concrete exploit path.",
+  "values": [
+    "confirmed",
+    "false_positive",
+    "corrected",
+    "hardening"
+  ],
+  "note": "Distinct from the 5-value validity enum (which includes not_verified for audit-stage defaults). Events never carry not_verified.",
+  "used_in_schemas": [
+    "layer.schema.json"
+  ]
+}

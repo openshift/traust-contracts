@@ -1,0 +1,18 @@
+{
+  "name": "disposition_resolution",
+  "source_schema": "cloud-config-findings-current.schema.json#/properties/findings/items/properties/disposition/properties/resolution",
+  "description": "Finding remediation resolution state. Tracks progress from open through risk acceptance or regression.",
+  "values": [
+    "open",
+    "fix_in_progress",
+    "resolved",
+    "partially_resolved",
+    "risk_accepted",
+    "regression_introduced"
+  ],
+  "used_in_schemas": [
+    "cloud-config-findings-current.schema.json",
+    "remediation.schema.json",
+    "layer.schema.json"
+  ]
+}
