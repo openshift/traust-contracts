@@ -14,6 +14,7 @@ from traust_contracts.v1.enums import (
     Validity,
 )
 from traust_contracts.v1.models._base import ContractModel
+from traust_contracts.v1.timestamps import IsoTimestamp
 
 
 class LayerActor(ContractModel):
@@ -61,13 +62,16 @@ class ExternalRef(ContractModel):
 
 
 class LayerEvent(ContractModel):
+    # Timestamps are validated here rather than left to the schema: jsonschema
+    # asserts `format: date-time` only when the optional rfc3339-validator
+    # package is present, so as bare `str` these were never checked anywhere.
     event_id: str
     finding_ref: str
-    recorded_at: str
+    recorded_at: IsoTimestamp
     source: LayerSource
     disposition: LayerDisposition
     rationale: str
-    occurred_at: str | None = None
+    occurred_at: IsoTimestamp | None = None
     harness_version: str | None = None
     auto_accept_tier: bool | None = None
     evidence_grade: str | None = None
@@ -82,7 +86,7 @@ class ReviewItem(ContractModel):
     finding_ref: str
     queue_reason: LayerReviewQueueReason
     status: str
-    recorded_at: str
+    recorded_at: IsoTimestamp
     source: LayerSource
     disposition: LayerDisposition | None = None
     resolution_note: str | None = None
