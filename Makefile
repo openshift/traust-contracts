@@ -7,7 +7,9 @@ DB_CONTAINER := traust-postgres
 DB_IMAGE := docker.io/library/postgres:16
 DB_PORT := 5432
 
-.PHONY: help setup sync hooks lint lint-fix test storage-check db-up db-down check-release status bump docs $(BUMP_PARTS)
+.PHONY: help setup sync hooks lint lint-fix test storage-check db-up db-down check-release status bump docs $(BUMP_PARTS) \
+	downstream-status downstream-bump-ledger downstream-bump-engine downstream-bump-traust \
+	downstream-chain downstream-chain-push downstream-chain-pr downstream-reconcile
 
 help:
 	@echo "Targets ($(notdir $(CURDIR))):"
@@ -23,6 +25,16 @@ help:
 	@echo "  make status         — current version, tag, git state"
 	@echo "  make bump patch|minor|major — bump VERSION + pyproject.toml"
 	@echo "  make docs           — regenerate DDL model docs (DOCS_DIR=$(DOCS_DIR))"
+	@echo ""
+	@echo "Downstream pin chain (contracts -> ledger -> engine -> traust, see ci/README.md):"
+	@echo "  make downstream-status       — drift report across all four sibling repos"
+	@echo "  make downstream-bump-ledger  — pin ledger to this repo's HEAD, test-gate, commit (local only)"
+	@echo "  make downstream-bump-engine  — pin engine to contracts+ledger HEAD, test-gate, commit"
+	@echo "  make downstream-bump-traust  — pin traust to contracts+ledger+engine HEAD, test-gate, commit"
+	@echo "  make downstream-chain        — walk all three hops, stop at first failure (local only)"
+	@echo "  make downstream-chain-push   — same, pushing each hop's branch as it lands"
+	@echo "  make downstream-chain-pr     — same, push + open a PR against traust-security/* at each hop"
+	@echo "  make downstream-reconcile    — re-pin any hop whose tracked upstream PR merged via squash/rebase"
 
 setup: sync hooks
 	@echo "ready — local hooks enabled (.githooks). Bypass: git commit --no-verify"
@@ -98,3 +110,30 @@ bump:
 		exit 1; \
 	fi; \
 	$(PYTHON) $(RELEASE) bump $$part
+
+# --- Downstream pin chain: contracts -> ledger -> engine -> traust ---
+# Drives sibling checkouts on disk (ci/README.md). Local-only unless noted.
+
+downstream-status:
+	$(PYTHON) ci/bump_downstream.py status
+
+downstream-bump-ledger:
+	$(PYTHON) ci/bump_downstream.py bump ledger
+
+downstream-bump-engine:
+	$(PYTHON) ci/bump_downstream.py bump engine
+
+downstream-bump-traust:
+	$(PYTHON) ci/bump_downstream.py bump traust
+
+downstream-chain:
+	$(PYTHON) ci/bump_downstream.py chain
+
+downstream-chain-push:
+	$(PYTHON) ci/bump_downstream.py chain --push
+
+downstream-chain-pr:
+	$(PYTHON) ci/bump_downstream.py chain --open-pr
+
+downstream-reconcile:
+	$(PYTHON) ci/bump_downstream.py reconcile

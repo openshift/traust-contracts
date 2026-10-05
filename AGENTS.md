@@ -9,4 +9,9 @@ Identity vectors are **not** here: the finding-fingerprint suite was retired on 
 - **Commits:** conventional `type(scope): subject` (`feat`, `fix`, `perf`, `chore`, `ci`, …)
 - **Releases:** `feat`/`fix`/`perf`/breaking PRs need `make check-release`, `VERSION` + `CHANGELOG.md` bump
 - **Compat:** schema/vector breaks need major bump; escape hatch `CONTRACTS_ALLOW_BREAKING=1 uv run pytest tests/ -q`
+- **Downstream pin:** `traust-ledger`, `traust-engine`, and `traust` each carry a
+  direct `[tool.uv.sources]` pin on this repo (`rev = "<sha>"`, not a tag).
+  After merging here, bump the pin to the new commit in all three, `uv lock`,
+  and run each repo's own tests before opening its PR. `make
+  downstream-chain-pr` scripts this; see [ci/README.md](ci/README.md).
 - **Setup:** `make setup` once per clone (hooks). More: [CONTRIBUTING.md](CONTRIBUTING.md), [README.md](README.md)

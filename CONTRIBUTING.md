@@ -67,6 +67,24 @@ Tests warn and skip when the database or `psycopg` is unavailable.
 
 **Main:** tag if `VERSION` > latest git tag
 
+## Downstream pins
+
+Consumers pin this repo by commit sha (`[tool.uv.sources] rev = "<sha>"`), not
+a release tag — a tag needs this repo's own release cut first, a commit
+doesn't. After your change merges to main, bump the pin to the new commit in
+each direct downstream repo's `pyproject.toml`, `uv lock`, and run that
+repo's own tests before opening its PR.
+
+Direct downstream: `traust-ledger`, `traust-engine`, `traust` (all three pin
+this repo directly, not just transitively through ledger/engine).
+
+The mechanical part of this — pin, `uv lock`, test, commit — is scripted:
+`make downstream-chain-pr` walks all three hops, test-gating each one on the
+repo's own `make test`, and opens a PR against `traust-security/*` at each.
+See [`ci/README.md`](ci/README.md) (`ci/bump_downstream.py`) for the full
+command list and how it handles forks, squash merges, and resuming a failed
+hop.
+
 ## Running tests
 
 ```bash
