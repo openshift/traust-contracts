@@ -67,6 +67,7 @@ class RoadmapItem(ContractModel):
     action: str
     addresses: list[str] = Field(default_factory=list)
     effort: str | None = None
+    blocked_external: bool | None = Field(default=None, strict=True)
 
 
 class ResolutionCounts(ContractModel):

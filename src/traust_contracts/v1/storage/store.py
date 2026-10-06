@@ -1744,6 +1744,7 @@ class Store:
                     "source_findings": _json_or_none(finding.get("source_findings")),
                     "passes": _json_or_none(finding.get("passes")),
                     "remediation_effort": finding.get("remediation_effort"),
+                    "blocked_external": _boolean(finding.get("blocked_external")),
                     "pqc_classification": finding.get("pqc_classification"),
                     "fingerprint_algo": finding.get("fingerprint_algo"),
                     "isolation_boundary": finding.get("isolation_boundary"),

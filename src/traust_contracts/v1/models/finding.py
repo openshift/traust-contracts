@@ -90,6 +90,7 @@ class Finding(ContractModel):
     origin: str | None = None
     pqc_classification: str | None = None
     remediation_effort: str | None = None
+    blocked_external: bool | None = Field(default=None, strict=True)
     isolation_dimensions: list[str] = Field(default_factory=list)
     isolation_boundary: str | None = None
     disposition: Disposition | None = None

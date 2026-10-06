@@ -14,6 +14,7 @@ import pytest
 from conftest import (
     FINDINGS_SUMMARY_ROWS,
     FINDINGS_SUMMARY_SCOPE,
+    report_with_external_blocking,
     report_with_findings,
     seed_findings_summary,
 )
@@ -284,6 +285,24 @@ def test_postgres_report_findings_match_sqlite_row_for_row(database: tuple[Any, 
     assert disposed[10] == "confirmed"
     assert bare[0] == "FIND-002"
     assert all(value is None for value in bare[1:])
+    conn.commit()
+
+
+def test_postgres_report_blocking_preserves_false_and_absent(database: tuple[Any, str]) -> None:
+    conn, _ = database
+    store = Store(conn)
+    store.init()
+    result = store.ingest("report", report_with_external_blocking(), run_binding())
+    rows = conn.execute(
+        "SELECT finding_id, remediation_effort, blocked_external "
+        "FROM report_finding WHERE binding_id = %s ORDER BY finding_id",
+        (result.binding_id,),
+    ).fetchall()
+    assert rows == [
+        ("FIND-001", "m", 1),
+        ("FIND-002", "m", 0),
+        ("FIND-003", "blocked-external", None),
+    ]
     conn.commit()
 
 

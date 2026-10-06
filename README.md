@@ -166,6 +166,44 @@ python validate.py --schema report myreport.json
 python validate.py --list
 ```
 
+### Canonical-write review candidate
+
+Default schemas preserve historical effort values, free-text roadmap fields
+and open extra-property values. The optional `blocked_external` fact is
+independent of effort size. Canonical sizes and priority labels are defined in
+[`effort`](enums/v1/effort.json) and
+[`roadmap_priority`](enums/v1/roadmap-priority.json); no duration thresholds,
+urgency policy or automatic legacy-size mappings are defined.
+
+Explicitly select the stricter contract without adding serialized fields:
+
+```bash
+python validate.py --schema 'report#/$defs/canonical_write' myreport.json
+```
+
+The same `#/$defs/canonical_write` selector exists for `adapter-result`,
+`validation`, `pqc-blockers`, `pqc-readiness` and `threat-model`.
+The decision tree follows its existing definitions convention:
+`pqc-decision-tree#/definitions/canonical_write`.
+These fragments preserve existing requiredness and permit only actual boolean
+blocking flags, not strings or null. On formerly open objects the default reader
+properties remain unconstrained so historical extra values stay readable.
+Mitigation and decision-tree rule effort remains required even when blocked;
+unknown-size omission is not an approved policy.
+
+This is an unreleased, known-size review candidate, not a producer switch.
+Default validator selection is unchanged. Reader normalization, event-identity
+gates and affected-contract review still precede writer activation/publication.
+Existing report, baseline and event bytes are never rewritten.
+
+Storage revision 3 carries the independent flag in a nullable
+`report_finding.blocked_external` INTEGER column on SQLite and PostgreSQL.
+True/false project as 1/0; absence remains SQL NULL, including historical
+`blocked-external` effort labels with no separately stated flag. No size or
+blocking fact is inferred. Existing report JSON remains intact. Initialization
+refuses older storage revisions without modifying them; this candidate supplies
+no automatic or live database migration.
+
 ## Test
 
 ```bash

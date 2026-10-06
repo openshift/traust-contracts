@@ -165,6 +165,8 @@
           "priority": {
             "type": "string"
           },
+          "effort": {},
+          "blocked_external": {},
           "action": {
             "type": "string"
           },
@@ -272,10 +274,43 @@
             "trivial",
             "moderate",
             "significant",
-            "blocked-external"
+            "blocked-external",
+            "xs",
+            "s",
+            "m",
+            "l",
+            "xl"
           ]
-        }
+        },
+        "blocked_external": {}
       }
+    },
+    "canonical_write": {
+      "description": "Opt-in known-size write contract; open historical extras remain readable.",
+      "allOf": [
+        { "$ref": "#" },
+        {
+          "properties": {
+            "findings": {
+              "items": {
+                "properties": {
+                  "remediation_effort": { "$ref": "report.schema.json#/$defs/effort" },
+                  "blocked_external": { "type": "boolean" }
+                }
+              }
+            },
+            "remediation_roadmap": {
+              "items": {
+                "properties": {
+                  "priority": { "$ref": "report.schema.json#/$defs/roadmap_priority" },
+                  "effort": { "$ref": "report.schema.json#/$defs/effort" },
+                  "blocked_external": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

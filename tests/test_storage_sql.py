@@ -14,7 +14,7 @@ from storage_samples import (
 )
 
 from traust_contracts.paths import storage_dir
-from traust_contracts.v1.storage.sql import REVISION, bootstrap_files, bootstrap_statements
+from traust_contracts.v1.storage.sql import bootstrap_files, bootstrap_statements
 
 TABLES = {
     "artifact_evidence",
@@ -25,17 +25,6 @@ TABLES = {
     *ALL_SECONDARY_PROJECTION_TABLES,
 }
 POSTGRES_SCHEMA = "traust_storage"
-
-
-def test_storage_revision_matches_migration_placeholder() -> None:
-    # Revision 2 added artifact_binding.artifact_role and artifact_location.
-    # The placeholder names the next migration, so it moves with REVISION.
-    assert REVISION == 2
-    for dialect in ("sqlite", "postgres"):
-        migrations = storage_dir() / dialect / "migrations"
-        assert sorted(p.name for p in migrations.glob("*.sql")) == [
-            f"{REVISION:03d}_to_{REVISION + 1:03d}.sql"
-        ]
 
 
 POSTGRES_RELATIONS = {

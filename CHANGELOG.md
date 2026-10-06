@@ -2,6 +2,45 @@
 
 All notable changes to traust-contracts are documented here.
 
+## [0.49.0]
+
+Unreleased review candidate; no producer cutover or historical rewrite.
+
+### Added
+
+- Canonical effort sizes and roadmap priority labels, with an independent
+  optional `blocked_external` boolean. Historical effort values, free-text
+  roadmaps and open extra values remain valid in default schemas.
+- Explicitly selected `canonical_write` fragments for report, adapter-result,
+  validation, PQC blockers/readiness/decision-tree and threat-model artifacts.
+  The validator's schema selector accepts a JSON Pointer fragment.
+- Registry meanings and project-defined standard declarations. No duration,
+  urgency or legacy-size replacement policy is introduced.
+
+### Fixed
+
+- Compatibility acceptance detects enum introduction, const-list narrowing,
+  open-object closure and constrained additions to historical open properties.
+  A preserved historical const-list alternative remains additive.
+
+### Unchanged
+
+- Effort remains required on mitigation and decision-tree rule objects.
+  Unknown-size blocking policy awaits review; no size/null fallback is emitted.
+- Default readers, writers, release pins, historical reports and ledger events.
+  Reader/identity rollout gates and affected-contract review remain required.
+
+### Storage revision 3
+
+- Added only nullable `report_finding.blocked_external` and its upsert/projection
+  on SQLite and PostgreSQL, using the existing INTEGER flag convention.
+  True/false/absent remain 1/0/NULL, independent of effort; legacy effort labels
+  do not fabricate the flag.
+- Fresh stores stamp revision 3. Older revisions are refused before alteration;
+  no automatic/live database migration or historical rewrite is performed.
+  Removed the obsolete non-executing revision-2-to-3 migration placeholders;
+  no replacement placeholder or fabricated migration is introduced.
+
 ## [0.48.1]
 
 ### Fixed

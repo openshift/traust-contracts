@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS traust_storage.report_finding (
     source_findings JSONB,
     passes JSONB,
     remediation_effort TEXT,
+    blocked_external INTEGER,
     pqc_classification TEXT,
     fingerprint_algo TEXT,
     isolation_boundary TEXT,

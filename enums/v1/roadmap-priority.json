@@ -1,0 +1,15 @@
+{
+  "name": "roadmap_priority",
+  "source_schema": "report.schema.json#/$defs/roadmap_priority",
+  "description": "Priority labels for explicitly selected future-write roadmap contracts.",
+  "values": ["p0", "p1", "p2", "p3", "p4"],
+  "definitions": {
+    "p0": "Priority label with numeric rank 0; no urgency or deadline mapping is defined.",
+    "p1": "Priority label with numeric rank 1; no urgency or deadline mapping is defined.",
+    "p2": "Priority label with numeric rank 2; no urgency or deadline mapping is defined.",
+    "p3": "Priority label with numeric rank 3; no urgency or deadline mapping is defined.",
+    "p4": "Priority label with numeric rank 4; no urgency or deadline mapping is defined."
+  },
+  "standard": { "none": "Project-defined labels; no external standard is adopted." },
+  "used_in_schemas": ["pqc-blockers.schema.json", "report.schema.json"]
+}

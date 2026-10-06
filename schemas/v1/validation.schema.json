@@ -898,6 +898,19 @@
       },
       "description": "P9: severity validated from live observations. Downgrades are as valuable as upgrades (e.g. exploitation demonstrably required cluster-admin)."
     },
+    "canonical_write": {
+      "description": "Opt-in contract for novel findings; historical validation is unchanged.",
+      "allOf": [
+        { "$ref": "#" },
+        {
+          "properties": {
+            "novel_findings": {
+              "items": { "$ref": "report.schema.json#/$defs/canonical_finding" }
+            }
+          }
+        }
+      ]
+    },
     "replay_artifact": {
       "type": "object",
       "required": [

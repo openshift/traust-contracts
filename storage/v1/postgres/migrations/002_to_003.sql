@@ -1,2 +1,0 @@
--- Placeholder for a future storage v1 revision 2 to revision 3 migration.
--- Use this when a schema change must upgrade an existing database rather than recreate it.

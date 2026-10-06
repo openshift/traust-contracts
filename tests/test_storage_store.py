@@ -15,6 +15,7 @@ import pytest
 from conftest import (
     FINDINGS_SUMMARY_ROWS,
     FINDINGS_SUMMARY_SCOPE,
+    report_with_external_blocking,
     report_with_findings,
     seed_findings_summary,
 )
@@ -115,10 +116,13 @@ def test_init_revision_and_dependency_shape(store: Store) -> None:
     assert len(original) == 1 and original[0][:3] == (1, CONTRACT_VERSION, REVISION)
     store.init()
     assert conn.execute("SELECT * FROM traust_storage_meta").fetchall() == original
-    conn.execute("UPDATE traust_storage_meta SET revision=?", (REVISION - 1,))
+    conn.execute("ALTER TABLE report_finding DROP COLUMN blocked_external")
+    conn.execute("UPDATE traust_storage_meta SET revision=?", (2,))
     conn.commit()
+    legacy_dump = tuple(conn.iterdump())
     with pytest.raises(IngestError, match=r"explicit migration"):
         store.init()
+    assert tuple(conn.iterdump()) == legacy_dump
 
 
 def test_binding_id_golden_vector_and_presence_encoding() -> None:
@@ -441,6 +445,29 @@ def test_report_findings_project_disposition_and_fingerprint(store: Store) -> No
     # A finding with no disposition still projects, carrying identity only.
     assert bare[0] == "FIND-002"
     assert all(value is None for value in bare[1:])
+
+
+def test_report_blocking_projects_true_false_and_absent_independently(store: Store) -> None:
+    result = store.ingest("report", report_with_external_blocking(), binding_for("report"))
+    rows = store.conn.execute(
+        "SELECT finding_id, remediation_effort, blocked_external "
+        "FROM report_finding WHERE binding_id = ? ORDER BY finding_id",
+        (result.binding_id,),
+    ).fetchall()
+    assert rows == [
+        ("FIND-001", "m", 1),
+        ("FIND-002", "m", 0),
+        ("FIND-003", "blocked-external", None),
+    ]
+
+
+@pytest.mark.parametrize("invalid", ["true", 1, 0, None])
+def test_report_invalid_blocking_is_rejected_before_storage(store: Store, invalid: Any) -> None:
+    document = json.loads(report_with_external_blocking())
+    document["findings"][0]["blocked_external"] = invalid
+    with pytest.raises(IngestError, match="validation"):
+        store.ingest("report", encode(document), binding_for("report"))
+    assert_empty(store)
 
 
 def test_report_projection_is_consistent_with_source(store: Store) -> None:
