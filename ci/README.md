@@ -133,17 +133,32 @@ just don't be surprised by it in review.
 
 ## After PRs merge: `make downstream-reconcile`
 
-Merge-commit or fast-forward merges keep the pinned sha reachable from
-`main` — no action needed. **Squash and rebase merges mint a new sha**, so
-the branch-tip sha you pinned goes dangling the moment the upstream PR
-merges. `reconcile`:
+Validity after a merge is **reachability, not sha equality** — a "create a
+merge commit" merge mints a brand-new 2-parent tip on `main` every time, so
+the pinned sha is essentially never literally equal to `origin/main`'s tip
+even when the pin is perfectly current. The original pinned commit is still
+permanently in `main`'s history, just not its literal HEAD. Only **squash and
+rebase merges actually orphan** the pinned sha (not reachable from `main` at
+all afterward) — that's the one case that needs a re-pin.
 
-1. Reads `.chain-state.json` for each hop's tracked upstream PR number.
-2. `gh pr view --json state,mergeCommit` on it.
-3. Not merged yet → prints current state, no action.
-4. Merged, same sha → prints "already canonical", no action.
-5. Merged, different sha (squash/rebase) → re-pins to the real merge
-   commit, `uv lock`, re-test, then:
+`reconcile` checks each of a hop's pins directly against its dependency's own
+`origin/main` (`git merge-base --is-ancestor`), not against any locally
+tracked PR state — an earlier version compared the hop's own merge-commit
+sha against a stored `head_sha` field that actually held a *different*
+repo's commit (the trigger dependency's sha, recorded for a different
+purpose: resolving what to re-pin to on a retry, not identifying the hop's
+own resulting commit). Comparing across two repos' object graphs isn't "a
+stale pin," it's a type error — surfaced as `fatal: Not a valid commit name
+<sha>` the first time this ran against real merged PRs. Fixed: reachability
+is now checked per-pin, per-dependency, with no cross-repo sha confusion:
+
+1. For each pin this hop carries: fetch that dependency's `origin`, check if
+   the pinned sha is `origin/main` or an ancestor of it.
+2. All reachable → "nothing to reconcile", regardless of merge method used
+   upstream or whether a PR number was ever tracked for it.
+3. Any not reachable (squash/rebase did happen) → re-pin every pin on this
+   hop to each dependency's current `origin/main` tip, `uv lock`, re-test,
+   then:
    - hop's own PR still open → pushes the fix to that same branch
    - hop's own PR already merged too → prints a message telling you to
      run `make downstream-bump-<hop>` fresh instead of auto-chaining a new PR
