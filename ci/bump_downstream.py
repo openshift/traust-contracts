@@ -134,6 +134,24 @@ class Git:
         out = self._run("git", "branch", "-r", "--contains", sha, capture=True).stdout
         return any(line.strip().startswith(f"{remote}/") for line in out.splitlines())
 
+    def ancestor_of(self, maybe_ancestor: str, ref: str) -> bool:
+        """True if `maybe_ancestor` IS `ref` or an ancestor of it.
+
+        A "create a merge commit" merge mints a brand-new 2-parent commit on
+        main -- the pinned sha is never literally equal to main's new tip,
+        but it's still fully valid (in main's history, permanently reachable,
+        nothing dangling). Pin validity after a merge is reachability, not
+        sha equality; only squash/rebase actually orphans the pinned sha.
+        """
+        return (
+            subprocess.run(
+                ("git", "merge-base", "--is-ancestor", maybe_ancestor, ref),
+                cwd=self.cwd,
+                check=False,
+            ).returncode
+            == 0
+        )
+
     def checkout_new(self, branch: str) -> None:
         self._run("git", "checkout", "-b", branch)
 
@@ -474,36 +492,42 @@ class Bumper:
 
 
 def reconcile_hop(hop: Hop, state: dict[str, dict]) -> None:
-    dep = hop.trigger
-    dep_record = state.get(dep)  # type: ignore[arg-type]
-    if dep_record is None or "pr" not in dep_record:
-        print(f"{hop.name}: no tracked PR for {dep}, nothing to reconcile")
-        return
+    """Checks EACH of this hop's pins for reachability from its dep's own
+    origin/main -- not sha equality, and not against any locally-tracked PR
+    state (that field tracks a different thing: which upstream commit
+    TRIGGERED this hop's bump, not the dep's own resulting sha -- comparing
+    across two different repos' object graphs is a type error, not a stale
+    pin. See ci/README.md).
 
-    info = gh_pr_view(ROOT / dep, dep, dep_record["pr"])
-    if info["state"] != "MERGED":
-        print(
-            f"{hop.name}: {dep} PR #{dep_record['pr']} still {info['state'].lower()}, pin unchanged"
-        )
-        return
+    A "create a merge commit" merge mints a brand-new tip every time, but the
+    ORIGINAL pinned commit stays fully in main's history -- reachable, not
+    dangling. Only squash/rebase actually orphans the pinned sha; that's the
+    only case this re-pins.
+    """
+    writer = PinWriter(hop.path / "pyproject.toml")
+    current_shas: dict[str, str] = {}
+    stale: list[str] = []
+    for dep in hop.pins:
+        dep_git = Git(ROOT / dep)
+        dep_git.fetch("origin")
+        tip = dep_git.rev_parse("origin/main")
+        current_shas[dep] = tip
+        pinned = writer.current_pin(dep)
+        is_sha = bool(pinned and re.match(r"^[0-9a-f]{7,40}$", pinned))
+        reachable = is_sha and (pinned == tip or dep_git.ancestor_of(pinned, "origin/main"))
+        if not reachable:
+            stale.append(dep)
 
-    merged_sha = (info.get("mergeCommit") or {}).get("oid")
-    pinned_sha = dep_record["head_sha"]
-    if not merged_sha or merged_sha == pinned_sha:
+    if not stale:
         print(
-            f"{hop.name}: {dep} merged as a fast-forward, pin {short(pinned_sha)} already canonical"
+            f"{hop.name}: all pins reachable from their dep's origin/main -- nothing to reconcile"
         )
         return
 
     print(
-        f"{hop.name}: {dep} PR #{dep_record['pr']} merged via squash/rebase -- "
-        f"pin {short(pinned_sha)} is dangling, re-pinning to merge commit {short(merged_sha)}"
+        f"{hop.name}: {', '.join(stale)} pin(s) not reachable from origin/main "
+        f"(squash/rebase merge upstream?) -- re-pinning to current tip"
     )
-
-    shas = {dep: merged_sha}
-    for other in hop.pins:
-        if other != dep:
-            shas[other] = (state.get(other) or {}).get("head_sha") or Git(ROOT / other).head()
 
     path = hop.path
     git = Git(path)
@@ -524,11 +548,10 @@ def reconcile_hop(hop: Hop, state: dict[str, dict]) -> None:
     else:
         if git.dirty:
             raise ChainError(f"{hop.name}: working tree not clean, aborting reconcile")
-        branch = Bumper(hop, shas).branch_name(merged_sha)
+        branch = Bumper(hop, current_shas).branch_name(current_shas[hop.trigger])  # type: ignore[index]
         git.checkout_new(branch)
 
-    writer = PinWriter(path / "pyproject.toml")
-    changed = [d for d in hop.pins if writer.pin(d, shas[d])]
+    changed = [d for d in hop.pins if writer.pin(d, current_shas[d])]
     if not changed:
         print(f"{hop.name}: pin already matches, nothing to commit")
         return
@@ -537,29 +560,26 @@ def reconcile_hop(hop: Hop, state: dict[str, dict]) -> None:
     print(f"==> test {hop.name}")
     subprocess.run(("make", "test"), cwd=path, check=True)
 
-    git.commit(f"chore(deps): reconcile pin to merged {dep}@{short(merged_sha)}")
+    message = "chore(deps): reconcile stale pin(s) -- " + ", ".join(
+        f"{d}@{short(current_shas[d])}" for d in changed
+    )
+    git.commit(message)
     print(f"{hop.name}: committed reconciliation on {branch}")
 
     git.push(branch)
     if hop_record and hop_record.get("pr"):
         print(f"{hop.name}: pushed update to existing PR #{hop_record['pr']}")
     else:
-        body = f"Reconciles pin after {dep} PR #{dep_record['pr']} merged via squash/rebase."
-        pr_number = gh_pr_create(
-            path,
-            hop.name,
-            branch,
-            f"chore(deps): reconcile {dep}@{short(merged_sha)}",
-            body,
-        )
+        body = "Reconciles pin(s) left dangling by an upstream squash/rebase merge."
+        pr_number = gh_pr_create(path, hop.name, branch, message, body)
         print(f"{hop.name}: opened reconciliation PR #{pr_number}")
         hop_record = {"pr": pr_number}
 
     state[hop.name] = {
         **(hop_record or {}),
         "branch": branch,
-        "dep": dep,
-        "head_sha": merged_sha,
+        "dep": hop.trigger,
+        "head_sha": current_shas[hop.trigger],  # type: ignore[index]
     }
     save_state(state)
 
@@ -598,10 +618,18 @@ def cmd_status() -> int:
         for dep in hop.pins:
             dep_git = Git(ROOT / dep)
             dep_git.fetch("origin")
-            upstream = short(dep_git.rev_parse("origin/main"))
+            upstream_full = dep_git.rev_parse("origin/main")
+            upstream = short(upstream_full)
             pinned = writer.current_pin(dep) or "?"
             pinned_short = pinned if not re.match(r"^[0-9a-f]{7,40}$", pinned) else short(pinned)
-            flag = "" if pinned_short.lstrip("v") == upstream else " DRIFT"
+            is_sha = bool(re.match(r"^[0-9a-f]{7,40}$", pinned))
+            # Reachability, not equality: a "merge commit" strategy mints a new
+            # tip sha on every merge, so pinned == origin/main would almost
+            # never hold even for a pin that's perfectly current.
+            current = pinned == upstream_full or (
+                is_sha and dep_git.ancestor_of(pinned, "origin/main")
+            )
+            flag = "" if current else " DRIFT"
             drift.append(f"{dep}=origin/main:{upstream}{flag} (pinned {pinned_short})")
         print(f"{hop.name}: HEAD {short(local)}{checkout_note}  pins: " + ", ".join(drift))
     return 0
