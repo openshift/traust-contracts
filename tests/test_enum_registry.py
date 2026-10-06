@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -73,44 +74,8 @@ def test_usage_follows_refs_across_files():
 
 
 def _synthetic() -> dict[str, dict]:
-    return {
-        "colour.json": {
-            "name": "colour",
-            "description": "What colour is it?",
-            "values": ["red", "crimson", "scarlet", "blue", "navy", "teal"],
-            "definitions": {
-                "red": "Red.",
-                "crimson": "Old name for red.",
-                "scarlet": "Old name for red.",
-                "blue": "Blue.",
-                "navy": "Dark blue; split into colour and shade.",
-                "teal": "No longer recorded.",
-            },
-            "standard": {"name": "Test palette", "relationship": "adapted", "note": "Fewer hues."},
-            "deprecated": {
-                "crimson": {"replaced_by": [{"enum": "colour", "value": "red"}]},
-                "scarlet": {"replaced_by": [{"enum": "colour", "value": "red"}]},
-                "navy": {
-                    "replaced_by": [
-                        {"enum": "colour", "value": "blue"},
-                        {"enum": "shade", "value": "dark"},
-                    ]
-                },
-                "teal": {"replaced_by": [], "note": "One-way: readers keep the original string."},
-                "maroon": {
-                    "replaced_by": [{"enum": "colour", "value": "red"}],
-                    "retired": True,
-                    "note": "Removed from values in a major release; old events still normalise.",
-                },
-            },
-        },
-        "shade.json": {
-            "name": "shade",
-            "description": "How dark is it?",
-            "values": ["dark", "light"],
-            "standard": {"none": "Test vocabulary."},
-        },
-    }
+    fixture = json.loads((ROOT / "tests/fixtures/enum-normalization.json").read_text())
+    return {f"{document['name']}.json": document for document in fixture["registry"]}
 
 
 def test_synthetic_registry_with_every_replacement_kind_passes():
