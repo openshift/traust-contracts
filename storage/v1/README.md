@@ -183,8 +183,7 @@ is a foreign key to `product_repo(product_repo_id)`, unique when set: one layer
 per product_repo. Storage is always present when a database is used and the
 ledger is optional, so the ledger depends on storage and never the reverse:
 the ledger's database backend must share the database with storage, and
-storage must be initialized first. `layer_id` stays independent; layers
-created before ledger revision 2 keep `product_repo_id` NULL until backfilled.
+storage must be initialized first. `layer_id` stays independent of it.
 Join storage and ledger on `artifact_binding.product_repo_id =
 layers.product_repo_id`, then `report_finding.finding_id = events.finding_ref`.
 
@@ -327,8 +326,13 @@ storage-internal integrity. Cross-artifact domain references remain soft.
 
 ## Compatibility
 
-Earlier experimental schemas were never published or used and have no migration
-contract. Recreate those databases rather than treating them as storage v1.
+Storage and ledger were **rebaselined to revision 1 in 0.50.0**: the registry,
+`report_finding.blocked_external` and every earlier change are part of the
+revision-1 schema. Databases created before 0.50.0 (any stamped revision) are
+recreated, not migrated -- an older database stamped revision 1 would pass the
+revision check with the wrong shape, so do not reuse one. Historical reports
+and events remain schema-readable; re-ingest them into the new database.
+
 ## Migrations
 
 **The schema and view files are written to run again.** Every table and index
@@ -337,10 +341,10 @@ is `CREATE ... IF NOT EXISTS`; every view is `CREATE OR REPLACE VIEW`
 themselves the upgrade for anything additive, and keeps them the single source
 of truth -- a migration never restates a table.
 
-`Store.migrate()` takes a database from any revision to `REVISION` in one
-transaction. Every step from revision 1 has a delta file, so the chain always
-builds up to the latest; an empty database (revision 0) is simply bootstrapped.
-For an existing database:
+`Store.migrate()` takes a database from its stamped revision to `REVISION` in
+one transaction; an empty database is bootstrapped. `init()` still refuses an
+older revision, so upgrading is always this explicit call. For an existing
+database:
 
 ```text
 1. drop the views storage owns     (names read from views/*.sql; views hold no data)
@@ -356,7 +360,7 @@ views (step 1) is what refreshes them: PostgreSQL fixes a view's columns at
 creation and SQLite's `IF NOT EXISTS` never replaces one.
 
 **Changing the schema** -- bump `REVISION` in `src/traust_contracts/v1/storage/sql.py`,
-then:
+fill in the placeholder delta for that step, add the next placeholder, then:
 
 | Change | Where it goes |
 |---|---|
@@ -367,27 +371,16 @@ then:
 Delta files are `<dialect>/migrations/NNN_to_NNN+1.sql`, one per revision step,
 both dialects. They hold only what re-running the files cannot do -- a test
 rejects `CREATE` in them. The file for the *next* step always exists as a
-placeholder. `tests/fixtures/storage/revision_N.<dialect>.sql` snapshot the DDL
-each revision shipped; tests migrate every revision (0 through `REVISION - 1`)
-and assert the result equals a fresh `init()` -- columns, foreign keys, indexes
-and view definitions -- on both dialects. Add the snapshot for the outgoing
-revision when you bump.
+placeholder. When a step lands, add a test that builds the previous revision,
+runs `Store.migrate()`, and compares it with a fresh `init()` on both dialects.
 
 `ALTER TABLE ... ADD COLUMN` appends, so a migrated table can order its columns
 differently from a fresh one (and `current_binding`'s `b.*` follows that order).
-Queries name their columns, so the order never reaches a reader; the migration
-tests compare columns by name.
+Queries name their columns, so the order never reaches a reader.
 
-0.48.0 wrote the revision-2 schema but stamped revision 1. `001_to_002.sql`
-fails on such a database (the column already exists) and writes nothing; set
-`traust_storage_meta.revision = 2` and run `Store.migrate()` again.
-
-Revision 3 adds the nullable `report_finding.blocked_external` column
-(`002_to_003.sql`); revision 4 adds the registry (`003_to_004.sql`). `init()`
-still stamps fresh databases and rejects an older revision before altering its
-schema or rows; upgrading an existing store is the explicit `Store.migrate()`
-call, never implicit. Historical reports and events remain schema-readable
-without rewriting them.
+The ledger follows the same revision rule (`traust_contracts.v1.ledger.REVISION`,
+`ledger/v1/<dialect>/migrations/`), but its schema files are not re-runnable, so
+a ledger delta carries every change its step needs.
 
 ## Checks
 

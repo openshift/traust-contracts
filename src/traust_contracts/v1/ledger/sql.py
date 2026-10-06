@@ -10,10 +10,10 @@ from traust_contracts.v1.sql import bootstrap_files as _bootstrap_files
 from traust_contracts.v1.sql import bootstrap_statements as bootstrap_statements
 
 CONTRACT_VERSION = "v1"
-#: Ledger schema revision. 2: layers.product_repo_id, a foreign key into
-#: traust_storage.product_repo (storage must be initialized first, same database).
-#: migrations/001_to_002.sql upgrades in place.
-REVISION = 2
+#: Ledger schema revision. 1: baseline (0.50.0), including layers.product_repo_id,
+#: a foreign key into traust_storage.product_repo (storage initialized first,
+#: same database). Databases created under any earlier schema are recreated.
+REVISION = 1
 POSTGRES_SCHEMA = "traust_ledger"
 # Foreign-key dependency order; this is the complete v1 table inventory.
 TABLE_ORDER: tuple[str, ...] = (

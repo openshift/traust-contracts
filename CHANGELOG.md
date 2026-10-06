@@ -15,8 +15,8 @@ All notable changes to traust-contracts are documented here.
   `find_product_repo` looks one up without creating it.
 - **`Binding.product_repo_id`.** Nullable `artifact_binding.product_repo_id`,
   a foreign key to `product_repo`: a binding to an unregistered owner writes
-  nothing. Not part of the binding identity (`binding_id` is unchanged from
-  revision 2); must match across a supersession.
+  nothing. Not part of the binding identity (`binding_id` is unchanged since
+  0.48.0); must match across a supersession.
 - **Inventory tables.** `product.segment`; `product_repo.sub_service` and
   `.resource_type`; new `product_repo_version` (which product versions ship a
   product_repo, with category, cluster operators, images) and `repo_owner`
@@ -33,34 +33,27 @@ All notable changes to traust-contracts are documented here.
   `traust_storage.product_repo`, unique when set (one layer per product_repo).
   The ledger depends on storage, never the reverse: its database backend must
   share the database with storage, initialized first. `layer_id` stays
-  independent; existing layers keep the column NULL until backfilled. Ledger
-  `REVISION` 1 -> 2; `ledger/v1/<dialect>/migrations/001_to_002.sql` and
-  `traust_contracts.v1.ledger.migration_files` for traust-ledger to apply.
-- **`Store.migrate()`.** Brings a database from any revision to `REVISION` in
-  one transaction; an empty database (revision 0) is bootstrapped. For an
+  independent. `traust_contracts.v1.ledger.migration_files` locates future
+  ledger deltas.
+- **`Store.migrate()`.** Brings a database from its stamped revision to
+  `REVISION` in one transaction; an empty database is bootstrapped. For an
   existing one: drop the views storage owns, create tables that do not exist
   yet, apply `<dialect>/migrations/NNN_to_NNN+1.sql` deltas, re-run every
   schema and view file, stamp the revision. Refuses a newer revision without
   writing anything.
-- **`001_to_002.sql`.** The revision 1 -> 2 step that 0.48.0 never shipped:
-  adds `artifact_binding.artifact_role`, rebuilds the context index, and moves
-  `artifact_evidence.reference` into `artifact_location`. Every revision now
-  migrates to the latest.
-
 ### Changed
 
-- **Revision 3 stores can be upgraded.** 0.49.0 shipped storage revision 3
-  without a migration path (init refuses older revisions). `Store.migrate()`
-  now takes revision 1, 2 or 3 stores to 4 in place; refusal on `init()` is
-  unchanged.
-- **Storage revision 4, and migrations hold deltas only.** The schema and view
-  files are written to run again, so a delta file carries only what re-running
-  them cannot do (ALTER / DROP / UPDATE); a test rejects `CREATE` in delta
-  files. `003_to_004.sql` is two `ALTER TABLE artifact_binding ADD COLUMN`
-  (`product_repo_id`, `commit_sha`); `002_to_003.sql` adds 0.49.0's
-  `report_finding.blocked_external`. The placeholder moves to `004_to_005.sql`.
-  See
-  storage/v1/README.md, "Migrations".
+- **Schema rebaseline: storage and ledger revision 1.** The schema had not
+  stabilized, so revisions collapse: storage revision 1 now includes the
+  registry, `report_finding.blocked_external` (0.49.0's revision 3) and every
+  earlier change; ledger revision 1 includes `layers.product_repo_id`.
+  **Databases created before 0.50.0 must be recreated** -- an older database
+  stamped revision 1 would otherwise pass the revision check with the wrong
+  shape. Migrations hold deltas only (ALTER / DROP / UPDATE; a test rejects
+  `CREATE`); each tree ships the `001_to_002.sql` placeholder. See
+  storage/v1/README.md, "Compatibility" and "Migrations".
+- **SQLite statement splitting** accepts a file whose trailing text is only
+  comments (a placeholder delta), and still rejects an incomplete statement.
 
 ## [0.49.0]
 

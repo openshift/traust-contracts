@@ -47,5 +47,6 @@ def bootstrap_statements(dialect: Dialect, path: Path) -> Iterator[str]:
         if sqlite3.complete_statement(statement):
             yield statement
             statement = ""
-    if statement.strip():
+    leftover = [line for line in statement.splitlines() if not line.lstrip().startswith("--")]
+    if any(line.strip() for line in leftover):
         raise ValueError(f"incomplete SQLite statement in {path.name}")

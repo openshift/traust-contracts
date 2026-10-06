@@ -8,7 +8,6 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from storage_samples import REGISTRY_TABLES, encode, sample
@@ -63,7 +62,7 @@ def test_registration_rejects_empty_and_nul(store: Store, call: Callable[[Store]
 
 
 def test_product_repo_is_not_part_of_binding_identity() -> None:
-    """binding_id keeps its revision-2 bytes; product_repo_id is a constrained attribute."""
+    """binding_id keeps its 0.48.0 bytes; product_repo_id is a constrained attribute."""
     digest = hashlib.sha256(b"").hexdigest()
     roled = Binding(subject_id="sci:inventory-item:42", role="baseline")
     assert binding_id(digest, "report", roled) == (
@@ -290,15 +289,8 @@ def test_supersession_must_keep_product_repo(store: Store) -> None:
         )
 
 
-FIXTURES = Path(__file__).parent / "fixtures" / "storage"
-
-
 def _schema(conn: sqlite3.Connection) -> dict[str, list[tuple[object, ...]]]:
-    """Columns (by name, not position), foreign keys, indexes and views.
-
-    ALTER TABLE appends, so a column added by a delta can sit at a different
-    position than in a fresh table; every query names its columns.
-    """
+    """Columns (by name, not position), foreign keys, indexes and views."""
     tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     shape: dict[str, list[tuple[object, ...]]] = {}
     for table in sorted(tables):
@@ -317,73 +309,36 @@ def _schema(conn: sqlite3.Connection) -> dict[str, list[tuple[object, ...]]]:
     return shape
 
 
-def _database_at(revision: int, stale_view: bool = False) -> sqlite3.Connection:
-    """A database built from the DDL exactly as revision ``revision`` shipped it."""
-    conn = sqlite3.connect(":memory:")
-    if revision:
-        sql = (FIXTURES / f"revision_{revision}.sqlite.sql").read_text(encoding="utf-8")
-        if stale_view:
-            sql += "\nDROP VIEW current_binding;\n"
-            sql += "CREATE VIEW current_binding AS SELECT binding_id FROM artifact_binding;\n"
-        conn.executescript(sql)
-        conn.execute(
-            "INSERT INTO traust_storage_meta VALUES (1, 'v1', ?, '2026-10-01T00:00:00+00:00')",
-            (revision,),
-        )
-        conn.commit()
-    return conn
-
-
 def _fresh() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     Store(conn).init()
     return conn
 
 
-@pytest.mark.parametrize("revision", range(REVISION))
-def test_migrate_from_any_revision_matches_a_fresh_database(revision: int) -> None:
-    conn = _database_at(revision)
-    if revision:
-        with pytest.raises(IngestError, match="explicit migration"):
-            Store(conn).init()
-    assert Store(conn).migrate() == revision
+def test_migrate_bootstraps_an_empty_database() -> None:
+    conn = sqlite3.connect(":memory:")
+    assert Store(conn).migrate() == 0
     Store(conn).init()
     assert _schema(conn) == _schema(_fresh())
 
 
-def test_migrate_from_revision_1_moves_evidence_references_to_locations() -> None:
-    conn = _database_at(1)
-    digest = "a" * 64
-    conn.execute(
-        "INSERT INTO artifact_evidence VALUES (?, 3, '2026-05-01T00:00:00+00:00', 's3://r/x.json')",
-        (digest,),
-    )
-    conn.execute(
-        "INSERT INTO artifact_binding (binding_id, artifact_digest, artifact_name, scope_id, "
-        "bound_at) VALUES (?, ?, 'report', 'local', '2026-05-01T00:00:00+00:00')",
-        ("b" * 64, digest),
-    )
-    conn.commit()
-    Store(conn).migrate()
-    assert conn.execute("SELECT binding_id, reference FROM artifact_location").fetchall() == [
-        ("b" * 64, "s3://r/x.json")
-    ]
-
-
-def test_migrate_refreshes_views_storage_owns() -> None:
-    """SQLite views are CREATE IF NOT EXISTS, so only the drop step refreshes them."""
-    conn = _database_at(REVISION - 1, stale_view=True)
-    Store(conn).migrate()
-    assert _schema(conn)["views"] == _schema(_fresh())["views"]
-
-
-def test_migrated_database_accepts_registry_bindings() -> None:
-    store = Store(_database_at(1))
-    store.migrate()
+def test_migrate_runs_a_step_through_its_delta_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With REVISION one ahead, migrate applies the 001_to_002 delta and re-runs the files."""
+    conn = _fresh()
+    store = Store(conn)
     owner = register(store)
-    payload, _ = sample("report")
-    result = store.ingest("report", payload, report_binding(owner))
-    assert store.get_binding(result.binding_id).binding.product_repo_id == owner
+    conn.execute("DROP VIEW current_binding")
+    conn.execute("CREATE VIEW current_binding AS SELECT binding_id FROM artifact_binding")
+    conn.commit()
+    for module in ("traust_contracts.v1.storage.store", "traust_contracts.v1.storage.sql"):
+        monkeypatch.setattr(f"{module}.REVISION", 2)
+    with pytest.raises(IngestError, match="explicit migration"):
+        store.init()
+    assert store.migrate() == 1
+    store.init()
+    assert conn.execute("SELECT revision FROM traust_storage_meta").fetchone() == (2,)
+    assert _schema(conn) == _schema(_fresh())
+    assert store.find_product_repo("rhacm", ACM_CLI) == owner
 
 
 def test_migrate_is_a_noop_at_the_current_revision(store: Store) -> None:
@@ -393,7 +348,7 @@ def test_migrate_is_a_noop_at_the_current_revision(store: Store) -> None:
 
 
 def test_migrate_refuses_a_newer_revision_and_writes_nothing() -> None:
-    conn = _database_at(REVISION - 1)
+    conn = _fresh()
     conn.execute("UPDATE traust_storage_meta SET revision = ?", (REVISION + 1,))
     conn.commit()
     before = _schema(conn)
