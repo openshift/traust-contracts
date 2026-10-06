@@ -77,11 +77,27 @@ directly with `bump <target> --open-pr` if you need just one.)
 ## Example: `make downstream-status`
 
 ```
-traust-contracts: HEAD 104519f
-traust-ledger: HEAD f8a7324  pins: traust-contracts=v0.48.1 (upstream 104519f DRIFT)
-traust-engine: HEAD 399bca3  pins: traust-contracts=v0.47.0 (upstream 104519f DRIFT), traust-ledger=v0.8.5 (upstream f8a7324 DRIFT)
-traust: HEAD 3de1247  pins: traust-contracts=v0.48.0 (upstream 104519f DRIFT), traust-ledger=v0.9.1 (upstream f8a7324 DRIFT), traust-engine=v0.19.0 (upstream 399bca3 DRIFT)
+traust-contracts: HEAD 947b05f
+traust-ledger: HEAD 945e544  pins: traust-contracts=origin/main:947b05f (pinned 104519f, BEHIND(4))
+traust-engine: HEAD eab3aa6  pins: traust-contracts=origin/main:947b05f (pinned 104519f, BEHIND(4)), traust-ledger=origin/main:945e544 (pinned d28490a, BEHIND(6))
+traust: HEAD 2ad90c1  pins: traust-contracts=origin/main:947b05f (pinned 104519f, BEHIND(4)), traust-ledger=origin/main:945e544 (pinned d28490a, BEHIND(6)), traust-engine=origin/main:b8ec452 (pinned 248746b, BEHIND(2))
 ```
+
+Three states per pin, not two -- reachability (does `reconcile` need to act)
+and currency (does `bump` have new work to do) are different questions:
+
+| State | Meaning | Who acts on it |
+|---|---|---|
+| `CURRENT` | pinned sha IS the dependency's `origin/main` tip | nobody, nothing to do |
+| `BEHIND(n)` | pinned sha is reachable (an ancestor), but `origin/main` has moved `n` commits past it | you -- run `make downstream-bump-<hop>` to pick up the new commits. Not an error; this is the normal in-between-bumps state |
+| `DANGLING` | pinned sha isn't reachable from `origin/main` at all (squash/rebase orphaned it) | `make downstream-reconcile` |
+
+`BEHIND` is informational by design -- `status` will never auto-advance a pin
+just because it's reporting one, same as `reconcile` never does. Both only
+ever *tell* you about `BEHIND`; only `bump` (deliberately, on request) moves
+a pin forward to new content. `DANGLING` is the only state `reconcile` acts
+on, and only because squash/rebase genuinely orphaned the commit -- it isn't
+"new commits exist," it's "the one you had stopped existing on `main`."
 
 Every repo behind the one in front of it — this is the normal starting state.
 
