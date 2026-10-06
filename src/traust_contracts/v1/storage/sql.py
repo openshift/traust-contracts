@@ -13,12 +13,11 @@ CONTRACT_VERSION = "v1"
 #: Storage schema revision, stamped in traust_storage_meta and checked on
 #: open. Bump it whenever the DDL changes, so a database created under an
 #: older schema is refused instead of failing on its first read or write.
-#: 2: artifact_binding.artifact_role and artifact_location (0.48.0).
-#: 3: nullable report_finding.blocked_external (0.49.0).
-#: 4: product -> repo registry (product, repo, product_repo, product_repo_version,
-#: repo_owner) and artifact_binding.product_repo_id / commit_sha (0.50.0).
-#: Every step has a migrations/NNN_to_NNN+1.sql; Store.migrate() runs them.
-REVISION = 4
+#: 1: baseline (0.50.0). Rebaselined: the registry, report_finding.blocked_external
+#: and every earlier change are part of revision 1. Databases created under any
+#: earlier schema are recreated, not migrated.
+#: Each later step adds migrations/NNN_to_NNN+1.sql; Store.migrate() runs them.
+REVISION = 1
 
 
 @cache

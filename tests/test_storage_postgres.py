@@ -536,32 +536,32 @@ def _pg_shape(conn: Any) -> dict[str, list[tuple[Any, ...]]]:
     return {"columns": columns, "indexes": indexes, "foreign_keys": foreign_keys, "views": views}
 
 
-@pytest.mark.parametrize("revision", range(REVISION))
-def test_postgres_migrate_from_any_revision_matches_a_fresh_database(
-    database: tuple[Any, str], revision: int
+def test_postgres_migrate_bootstraps_empty_and_runs_a_step(
+    database: tuple[Any, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pathlib import Path
-
+    """Empty -> bootstrap; then, with REVISION one ahead, a step through 001_to_002."""
     conn, _ = database
     Store(conn).init()
     expected = _pg_shape(conn)
     conn.execute("DROP SCHEMA traust_storage CASCADE")
     conn.commit()
-    if revision:
-        fixture = (
-            Path(__file__).parent / "fixtures" / "storage" / f"revision_{revision}.postgres.sql"
-        )
-        conn.execute(fixture.read_text(encoding="utf-8"))
-        conn.execute(
-            "INSERT INTO traust_storage.traust_storage_meta VALUES (1, 'v1', %s, now())",
-            (revision,),
-        )
-        conn.commit()
-        with pytest.raises(IngestError, match="explicit migration"):
-            Store(conn).init()
-    assert Store(conn).migrate() == revision
+    assert Store(conn).migrate() == 0
+    assert _pg_shape(conn) == expected
+    owner = _pg_registry_owner(Store(conn))
+    for module in ("traust_contracts.v1.storage.store", "traust_contracts.v1.storage.sql"):
+        monkeypatch.setattr(f"{module}.REVISION", REVISION + 1)
+    with pytest.raises(IngestError, match="explicit migration"):
+        Store(conn).init()
+    assert Store(conn).migrate() == REVISION
     Store(conn).init()
     assert _pg_shape(conn) == expected
+    rows = conn.execute(
+        "SELECT (SELECT revision FROM traust_storage_meta), "
+        "(SELECT count(*) FROM product_repo WHERE product_repo_id = %s)",
+        (owner,),
+    ).fetchone()
+    conn.commit()
+    assert rows == (REVISION + 1, 1)
 
 
 def test_postgres_inventory_tables(database: tuple[Any, str]) -> None:

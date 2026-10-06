@@ -2,8 +2,8 @@
 -- A real foreign key into traust_storage: storage is always present when a
 -- database is used, the ledger is optional, so the ledger depends on storage
 -- (never the reverse). Requires storage initialized first in the same
--- database. Nullable for layers created before revision 2; one layer per
--- product_repo when set. layer_id stays independent of it.
+-- database. One layer per product_repo when set. layer_id stays independent
+-- of it.
 CREATE TABLE traust_ledger.layers (
     layer_id VARCHAR NOT NULL,
     metadata_payload BYTEA NOT NULL,

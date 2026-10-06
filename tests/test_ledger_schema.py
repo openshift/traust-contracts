@@ -58,15 +58,15 @@ def test_exact_sql_inventory_and_bootstrap_order(dialect: str) -> None:
     namespace = [root / "namespace.sql"] if dialect == "postgres" else []
     expected = [*namespace, *(root / "schema" / f"{name}.sql" for name in TABLES)]
     assert CONTRACT_VERSION == "v1"
-    assert REVISION == 2
+    assert REVISION == 1
     assert POSTGRES_SCHEMA == "traust_ledger"
     assert TABLE_ORDER == TABLES
     assert bootstrap_files(dialect) == expected
     assert {p.name for p in (root / "schema").glob("*.sql")} == {f"{name}.sql" for name in TABLES}
-    deltas = migration_files(dialect, 1)
-    assert [p.name for p in deltas] == ["001_to_002.sql"]
+    assert migration_files(dialect, REVISION) == []
+    placeholder = root / "migrations" / f"{REVISION:03d}_to_{REVISION + 1:03d}.sql"
     assert {p.relative_to(root).as_posix() for p in root.rglob("*.sql")} == {
-        *(p.relative_to(root).as_posix() for p in [*expected, *deltas]),
+        *(p.relative_to(root).as_posix() for p in [*expected, placeholder]),
     }
     assert not (ledger_dir() / "manifest.json").exists()
     assert not (ledger_dir() / "manifest.schema.json").exists()
@@ -93,7 +93,7 @@ def test_sqlite_bootstrap_metadata_and_relations() -> None:
         )
         assert connection.execute(
             "SELECT contract_version, revision FROM schema_revision"
-        ).fetchone() == ("v1", 2)
+        ).fetchone() == ("v1", 1)
         assert connection.execute("SELECT id, applied_at FROM schema_revision").fetchone() == (
             1,
             "2026-01-01",
@@ -170,38 +170,6 @@ def test_ledger_requires_storage_in_the_same_database() -> None:
                 conn.execute(statement)
         with pytest.raises(sqlite3.OperationalError, match="no such table"):
             _layer(conn, "L1", None)
-
-
-def _sqlite_shape(conn: sqlite3.Connection) -> dict[str, object]:
-    return {
-        "columns": sorted(row[1:] for row in conn.execute("PRAGMA table_info(layers)")),
-        "foreign_keys": sorted(row[2:] for row in conn.execute("PRAGMA foreign_key_list(layers)")),
-        "indexes": sorted(
-            conn.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type = 'index' "
-                "AND tbl_name = 'layers' AND sql NOT NULL"
-            )
-        ),
-    }
-
-
-def test_sqlite_migration_1_to_2_matches_a_fresh_ledger() -> None:
-    layers = (ledger_dir() / "sqlite" / "schema" / "layers.sql").read_text(encoding="utf-8")
-    revision_1 = layers.replace(
-        "    product_repo_id TEXT REFERENCES product_repo(product_repo_id),\n", ""
-    )
-    start = revision_1.index("CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_layers_product_repo")
-    revision_1 = revision_1[:start] + revision_1[revision_1.index("CREATE TRIGGER", start) :]
-    with contextlib.closing(_ledger_on_storage({"layers": revision_1})) as conn:
-        conn.execute(
-            "INSERT INTO layers (layer_id, metadata_payload, needs_review_payload, "
-            "extensions_payload, root_keys_payload) VALUES ('old', x'00', x'00', x'00', x'00')"
-        )
-        for path in migration_files("sqlite", 1):
-            conn.executescript(path.read_text(encoding="utf-8"))
-        assert conn.execute("SELECT product_repo_id FROM layers").fetchall() == [(None,)]
-        with contextlib.closing(_ledger_on_storage()) as fresh:
-            assert _sqlite_shape(conn) == _sqlite_shape(fresh)
 
 
 def test_postgres_layers_reference_storage_product_repo(postgres_dsn: str) -> None:

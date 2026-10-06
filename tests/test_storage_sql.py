@@ -32,12 +32,10 @@ POSTGRES_SCHEMA = "traust_storage"
 
 
 def test_storage_revision_matches_migration_placeholder() -> None:
-    # Revision 2 added artifact_binding.artifact_role and artifact_location.
-    # Revision 3 added report_finding.blocked_external.
-    # Revision 4 added the product -> repo registry.
-    # Every step from revision 1 has a delta file, so Store.migrate() can always
-    # build up to REVISION; the next step's file exists as a placeholder.
-    assert REVISION == 4
+    # Revision 1 is the rebaselined schema (0.50.0). Every later step needs a
+    # delta file so Store.migrate() can build up to REVISION; the next step's
+    # file exists as a placeholder.
+    assert REVISION == 1
     for dialect in ("sqlite", "postgres"):
         migrations = storage_dir() / dialect / "migrations"
         assert sorted(p.name for p in migrations.glob("*.sql")) == [

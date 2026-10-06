@@ -53,6 +53,9 @@ never move under you.
 
 ## Storage contract
 
+New here? Start with the diagrams in [docs/data-model.md](docs/data-model.md):
+the product → repo registry, artifacts, projections and the ledger, and how they join.
+
 `storage/v1` ships readable, authored SQLite/PostgreSQL SQL and a reference
 Store that records artifact evidence metadata and caller-owned workflow bindings.
 Artifact bytes live in the caller's object store; storage retains the
