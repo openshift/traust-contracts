@@ -53,6 +53,7 @@ broken.
 | `run_id` | Optional execution/result occurrence supplied by the host |
 | `layer_id` | Optional Traust Ledger disposition-layer identity |
 | `role` | Optional lifecycle role within one context, from the artifact's `roles` in `profiles.json` |
+| `product_repo_id` | Optional registered owner of the binding (see [Product → repo registry](#product--repo-registry)); a foreign key, so it must exist |
 
 Storage treats caller identifiers as opaque UTF-8 strings. It rejects NUL
 because PostgreSQL `TEXT` cannot represent it. Storage does not parse or
@@ -83,7 +84,9 @@ optional(value):
 Fields are UTF-8 bytes without Unicode normalization. The presence marker
 distinguishes absent from present-empty values. `role` is trailing and
 present-only, so a binding without a role hashes exactly as it did before
-roles existed; every existing `binding_id` is unchanged.
+roles existed; every existing `binding_id` is unchanged. `product_repo_id`
+and `commit_sha` are not part of the identity: they are constrained attributes
+of the binding (see the registry below).
 
 Golden vector:
 
@@ -102,6 +105,88 @@ With a role (same digest, `artifact_name = report`, `role = baseline`):
 ```text
 binding_id      = d0da85a98aa803d79ba2fed07a8f991c706f2fbb44f3692cbd3ad8662961cb0b
 ```
+
+## Product → repo registry
+
+The registry is the parent every binding can reference. Products and repos are
+many-to-many: a library scanned for several products is one `repo` and one
+`product_repo` per product. A `product_repo` is a repo as a product ships it,
+at one ref (`''` for the default branch, `release-5.0` for a release branch the
+product ships); each has its own audits and its own ledger. It replaces the
+`findings/<product>/<repo>/` folder: every artifact binding references one.
+
+```mermaid
+erDiagram
+  product ||--o{ product_repo : includes
+  repo ||--o{ product_repo : "used by"
+  product_repo ||--o{ artifact_binding : owns
+  product_repo ||--o{ product_repo_version : shipped_in
+  product_repo ||--o{ repo_owner : owned_by
+  artifact_evidence ||--o{ artifact_binding : "filed as"
+```
+
+| Table | Primary key | Natural key (unique) |
+|---|---|---|
+| `product` | `product_id` | `slug` |
+| `repo` | `repo_id` | `repo_url` (exact string) |
+| `product_repo` | `product_repo_id` | `(product_id, repo_id, ref)`; `ref` is `''` for the default branch |
+
+Primary keys are database identifiers (UUIDs the Store assigns); the database
+enforces uniqueness on the natural keys. `Store.register_product`,
+`register_repo` and `register_product_repo` insert or refresh by natural key
+and return the stored id, so registering twice returns the same id.
+`find_product_repo(slug, repo_url, ref)` looks one up without creating it.
+`artifact_binding.product_repo_id` is a foreign key, so a binding to an
+unregistered product_repo writes nothing; it is one column because a composite
+foreign key cannot be added to an existing SQLite table. `repo_url` is not
+canonicalized here: register the form you will keep using.
+
+`product_repo_id` is not part of `binding_id`. Bytes bound in the same context
+(scope, subject, run, layer, role) under a different product_repo are an
+identity collision, not a second binding; give each product_repo its own
+subject.
+
+`artifact_binding.commit_sha` records the commit the artifact describes. It is a
+fact about the run, not part of the binding identity, and may change across a
+supersession; re-binding the same bytes with a different commit is an identity
+collision.
+
+Identical bytes filed under several product_repos are one `artifact_evidence`
+row and one binding per product_repo.
+
+**Inventory.** What products ship and who owns it comes from the inventory
+(`hybrid-platforms-inputs` CSVs), loaded into the registry. Concepts that are
+attributes of a row are columns, not tables:
+
+| Inventory fact | Where |
+|---|---|
+| segment (openshift, operator-catalog, services, ...) | `product.segment` |
+| app/sub-service, resource type | `product_repo.sub_service`, `.resource_type` |
+| product version that ships a product_repo, with category, cluster operators, images | `product_repo_version`, PK `(product_repo_id, version)` |
+| owning team, manager, individual owners, ownership source, Jira project/component | `repo_owner`, PK `(product_repo_id, team)` |
+
+Identity columns (slug, repo_url, the product_repo key) never change; these
+descriptive columns are refreshed by re-registering (`register_product`,
+`register_product_repo`, `register_product_repo_version`,
+`register_repo_owner`), so a reload of the inventory updates them in place.
+List attributes are JSON arrays. A product_repo with no `artifact_binding` is
+something a product ships that has never been scanned.
+
+**One current findings-current per product_repo and run.** A `report` with role
+`cumulative` and no predecessor starts a chain; a unique index allows one chain
+root per `(scope_id, product_repo_id, run_id)`, and the existing one-successor
+index keeps the chain linear. A newer findings-current must supersede the
+current one. Baseline audits are not constrained.
+
+**Ledger layers reference the product_repo.** `traust_ledger.layers.product_repo_id`
+is a foreign key to `product_repo(product_repo_id)`, unique when set: one layer
+per product_repo. Storage is always present when a database is used and the
+ledger is optional, so the ledger depends on storage and never the reverse:
+the ledger's database backend must share the database with storage, and
+storage must be initialized first. `layer_id` stays independent; layers
+created before ledger revision 2 keep `product_repo_id` NULL until backfilled.
+Join storage and ledger on `artifact_binding.product_repo_id =
+layers.product_repo_id`, then `report_finding.finding_id = events.finding_ref`.
 
 ## Roles
 
@@ -193,7 +278,8 @@ projection retains generated save and smoke-test coverage.
 
 | Operation | Rule |
 |---|---|
-| Initialize | Fresh databases bootstrap with the package's storage metadata; mismatches require explicit migration. |
+| Initialize | Fresh databases bootstrap with the package's storage metadata; mismatches require explicit migration (`Store.migrate()`). |
+| Migrate | Upgrade an older revision in place in one transaction; see [Migrations](#migrations). |
 | Save | Validate bytes, compute digest and byte size, acquire one digest lock on PostgreSQL, insert evidence record, insert binding, and write any projection in one transaction. Raw payload is not retained. |
 | Retry | The same binding returns `AlreadyBound` and only registers any new references. Evidence-level deduplication stays private. |
 | Correct | A new binding names `supersedes_binding_id`; clocks never determine correction order. |
@@ -243,12 +329,65 @@ storage-internal integrity. Cross-artifact domain references remain soft.
 
 Earlier experimental schemas were never published or used and have no migration
 contract. Recreate those databases rather than treating them as storage v1.
+## Migrations
 
-Storage revision 3 adds the nullable blocking column.
-`init()` stamps fresh databases and rejects an older revision before altering
-its schema or rows. No automatic or live database migration is included here;
-an existing store requires separately reviewed operator provisioning.
-Historical reports and events remain schema-readable without rewriting them.
+**The schema and view files are written to run again.** Every table and index
+is `CREATE ... IF NOT EXISTS`; every view is `CREATE OR REPLACE VIEW`
+(PostgreSQL) or `CREATE VIEW IF NOT EXISTS` (SQLite). That makes the files
+themselves the upgrade for anything additive, and keeps them the single source
+of truth -- a migration never restates a table.
+
+`Store.migrate()` takes a database from any revision to `REVISION` in one
+transaction. Every step from revision 1 has a delta file, so the chain always
+builds up to the latest; an empty database (revision 0) is simply bootstrapped.
+For an existing database:
+
+```text
+1. drop the views storage owns     (names read from views/*.sql; views hold no data)
+2. run schema files for tables that do not exist yet
+3. run <dialect>/migrations/NNN_to_NNN+1.sql for each step, in order
+4. re-run every bootstrap file      (namespace, tables, views)
+5. stamp traust_storage_meta with REVISION
+```
+
+Step 2 precedes the deltas so an `ALTER` can reference a new table; step 4
+follows them so existing tables' files can index the new column. Dropping the
+views (step 1) is what refreshes them: PostgreSQL fixes a view's columns at
+creation and SQLite's `IF NOT EXISTS` never replaces one.
+
+**Changing the schema** -- bump `REVISION` in `src/traust_contracts/v1/storage/sql.py`,
+then:
+
+| Change | Where it goes |
+|---|---|
+| New table, new index, new or changed view | Edit `schema/` or `views/` only |
+| New column on an existing table | Add it to the table file (append it) **and** an `ALTER TABLE ... ADD COLUMN` in the delta |
+| Changed or dropped index, column or constraint; data backfill | The delta: `DROP INDEX`, `ALTER`, `UPDATE` |
+
+Delta files are `<dialect>/migrations/NNN_to_NNN+1.sql`, one per revision step,
+both dialects. They hold only what re-running the files cannot do -- a test
+rejects `CREATE` in them. The file for the *next* step always exists as a
+placeholder. `tests/fixtures/storage/revision_N.<dialect>.sql` snapshot the DDL
+each revision shipped; tests migrate every revision (0 through `REVISION - 1`)
+and assert the result equals a fresh `init()` -- columns, foreign keys, indexes
+and view definitions -- on both dialects. Add the snapshot for the outgoing
+revision when you bump.
+
+`ALTER TABLE ... ADD COLUMN` appends, so a migrated table can order its columns
+differently from a fresh one (and `current_binding`'s `b.*` follows that order).
+Queries name their columns, so the order never reaches a reader; the migration
+tests compare columns by name.
+
+0.48.0 wrote the revision-2 schema but stamped revision 1. `001_to_002.sql`
+fails on such a database (the column already exists) and writes nothing; set
+`traust_storage_meta.revision = 2` and run `Store.migrate()` again.
+
+Revision 3 adds the nullable `report_finding.blocked_external` column
+(`002_to_003.sql`); revision 4 adds the registry (`003_to_004.sql`). `init()`
+still stamps fresh databases and rejects an older revision before altering its
+schema or rows; upgrading an existing store is the explicit `Store.migrate()`
+call, never implicit. Historical reports and events remain schema-readable
+without rewriting them.
 
 ## Checks
 

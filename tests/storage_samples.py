@@ -55,6 +55,12 @@ RUN_BOUND = {
     "verification",
     "vuln-findings",
 }
+#: The product -> repo registry. Bindings reference product_repo; these tables
+#: bootstrap before artifact_binding so the foreign key resolves on PostgreSQL.
+REGISTRY_TABLES = ("product", "repo", "product_repo")
+#: Inventory facts hanging off product_repo (versions shipped, owning teams).
+INVENTORY_TABLES = ("product_repo_version", "repo_owner")
+
 PROJECTION_TABLES = {
     **{name: name.replace("-", "_") for name in FAMILIES},
     "layer": "layer_event",

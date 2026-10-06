@@ -8,7 +8,9 @@ INSERT INTO traust_storage.artifact_binding (
     run_id,
     layer_id,
     supersedes_binding_id,
-    bound_at
+    bound_at,
+    product_repo_id,
+    commit_sha
 )
 VALUES (
     %(binding_id)s,
@@ -20,6 +22,8 @@ VALUES (
     %(run_id)s,
     %(layer_id)s,
     %(supersedes_binding_id)s,
-    %(bound_at)s
+    %(bound_at)s,
+    %(product_repo_id)s,
+    %(commit_sha)s
 )
 ON CONFLICT (binding_id) DO NOTHING;

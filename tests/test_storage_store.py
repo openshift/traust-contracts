@@ -22,7 +22,9 @@ from conftest import (
 from storage_samples import (
     ALL_SECONDARY_PROJECTION_TABLES,
     FAMILIES,
+    INVENTORY_TABLES,
     PROJECTION_TABLES,
+    REGISTRY_TABLES,
     RUN_BOUND,
     encode,
     rated_threat_model,
@@ -34,6 +36,8 @@ from traust_contracts.v1.storage.sql import CONTRACT_VERSION, REVISION
 from traust_contracts.v1.storage.store import _threat_score
 
 TABLES = [
+    *REGISTRY_TABLES,
+    *INVENTORY_TABLES,
     "artifact_binding",
     "artifact_evidence",
     "artifact_location",

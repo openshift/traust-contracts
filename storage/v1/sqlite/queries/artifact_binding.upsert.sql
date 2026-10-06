@@ -8,7 +8,9 @@ INSERT INTO artifact_binding (
     run_id,
     layer_id,
     supersedes_binding_id,
-    bound_at
+    bound_at,
+    product_repo_id,
+    commit_sha
 )
 VALUES (
     :binding_id,
@@ -20,6 +22,8 @@ VALUES (
     :run_id,
     :layer_id,
     :supersedes_binding_id,
-    :bound_at
+    :bound_at,
+    :product_repo_id,
+    :commit_sha
 )
 ON CONFLICT (binding_id) DO NOTHING;

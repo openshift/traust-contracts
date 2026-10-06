@@ -1,5 +1,6 @@
 """Read authored SQL in deterministic table-then-view bootstrap order."""
 
+import re
 from functools import cache
 from pathlib import Path
 
@@ -12,9 +13,12 @@ CONTRACT_VERSION = "v1"
 #: Storage schema revision, stamped in traust_storage_meta and checked on
 #: open. Bump it whenever the DDL changes, so a database created under an
 #: older schema is refused instead of failing on its first read or write.
-#: 3: nullable report_finding.blocked_external (0.49.0). No live database
-#: migration ships; init refuses older revisions without altering them.
-REVISION = 3
+#: 2: artifact_binding.artifact_role and artifact_location (0.48.0).
+#: 3: nullable report_finding.blocked_external (0.49.0).
+#: 4: product -> repo registry (product, repo, product_repo, product_repo_version,
+#: repo_owner) and artifact_binding.product_repo_id / commit_sha (0.50.0).
+#: Every step has a migrations/NNN_to_NNN+1.sql; Store.migrate() runs them.
+REVISION = 4
 
 
 @cache
@@ -57,6 +61,45 @@ def bootstrap_files(dialect: Dialect) -> list[Path]:
     return _bootstrap_files(
         storage_dir(),
         dialect,
-        first_tables=("artifact_evidence", "artifact_binding", "artifact_location"),
+        first_tables=(
+            "product",
+            "repo",
+            "product_repo",
+            "artifact_evidence",
+            "artifact_binding",
+            "artifact_location",
+        ),
         view_order=VIEW_ORDER,
     )
+
+
+def migration_files(dialect: Dialect, from_revision: int) -> list[Path]:
+    """Return the delta files that take ``from_revision`` to ``REVISION``, in order.
+
+    A delta file holds only what re-running the schema files cannot do:
+    ALTER, DROP, data UPDATEs. New tables, indexes and views come from the
+    schema and view files themselves, which Store.migrate() re-runs.
+    """
+    directory = storage_dir() / dialect / "migrations"
+    paths = [
+        directory / f"{step:03d}_to_{step + 1:03d}.sql" for step in range(from_revision, REVISION)
+    ]
+    missing = [path.name for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"missing {dialect} migration: {', '.join(missing)}")
+    return paths
+
+
+_VIEW_NAME = re.compile(r"CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.]+)")
+
+
+def view_names(dialect: Dialect) -> list[str]:
+    """Names of the views storage owns, in creation order, read from the SQL."""
+    names = []
+    for path in bootstrap_files(dialect):
+        if path.parent.name == "views":
+            match = _VIEW_NAME.search(path.read_text(encoding="utf-8"))
+            if match is None:
+                raise ValueError(f"no CREATE VIEW in {path.name}")
+            names.append(match.group(1))
+    return names
