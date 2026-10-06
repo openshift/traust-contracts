@@ -2,6 +2,66 @@
 
 All notable changes to traust-contracts are documented here.
 
+## [0.50.0]
+
+### Added
+
+- **Product -> repo registry.** New storage tables `product` (natural key
+  `slug`), `repo` (`repo_url`) and `product_repo` (`(product_id, repo_id,
+  ref)`, `ref` `''` = default branch). Products and repos are many-to-many.
+  Primary keys are database identifiers (UUIDs); uniqueness lives on the natural
+  keys. `Store.register_product`, `register_repo`, `register_product_repo`
+  insert or refresh by natural key and return the stored id;
+  `find_product_repo` looks one up without creating it.
+- **`Binding.product_repo_id`.** Nullable `artifact_binding.product_repo_id`,
+  a foreign key to `product_repo`: a binding to an unregistered owner writes
+  nothing. Not part of the binding identity (`binding_id` is unchanged from
+  revision 2); must match across a supersession.
+- **Inventory tables.** `product.segment`; `product_repo.sub_service` and
+  `.resource_type`; new `product_repo_version` (which product versions ship a
+  product_repo, with category, cluster operators, images) and `repo_owner`
+  (owning teams per product_repo). Loaded from the inventory; descriptive
+  columns refresh on re-register (`register_product_repo_version`,
+  `register_repo_owner`), identity columns never change.
+- **`Binding.commit_sha`.** Nullable `artifact_binding.commit_sha`: the commit
+  the artifact describes. Not part of the binding identity; may change across a
+  supersession.
+- **One current findings-current per product_repo and run.** Unique index on
+  the root of `report`/`cumulative` chains per `(scope_id, product_repo_id,
+  run_id)`; a newer findings-current must supersede the current one.
+- **Ledger `layers.product_repo_id`.** A foreign key to
+  `traust_storage.product_repo`, unique when set (one layer per product_repo).
+  The ledger depends on storage, never the reverse: its database backend must
+  share the database with storage, initialized first. `layer_id` stays
+  independent; existing layers keep the column NULL until backfilled. Ledger
+  `REVISION` 1 -> 2; `ledger/v1/<dialect>/migrations/001_to_002.sql` and
+  `traust_contracts.v1.ledger.migration_files` for traust-ledger to apply.
+- **`Store.migrate()`.** Brings a database from any revision to `REVISION` in
+  one transaction; an empty database (revision 0) is bootstrapped. For an
+  existing one: drop the views storage owns, create tables that do not exist
+  yet, apply `<dialect>/migrations/NNN_to_NNN+1.sql` deltas, re-run every
+  schema and view file, stamp the revision. Refuses a newer revision without
+  writing anything.
+- **`001_to_002.sql`.** The revision 1 -> 2 step that 0.48.0 never shipped:
+  adds `artifact_binding.artifact_role`, rebuilds the context index, and moves
+  `artifact_evidence.reference` into `artifact_location`. Every revision now
+  migrates to the latest.
+
+### Changed
+
+- **Revision 3 stores can be upgraded.** 0.49.0 shipped storage revision 3
+  without a migration path (init refuses older revisions). `Store.migrate()`
+  now takes revision 1, 2 or 3 stores to 4 in place; refusal on `init()` is
+  unchanged.
+- **Storage revision 4, and migrations hold deltas only.** The schema and view
+  files are written to run again, so a delta file carries only what re-running
+  them cannot do (ALTER / DROP / UPDATE); a test rejects `CREATE` in delta
+  files. `003_to_004.sql` is two `ALTER TABLE artifact_binding ADD COLUMN`
+  (`product_repo_id`, `commit_sha`); `002_to_003.sql` adds 0.49.0's
+  `report_finding.blocked_external`. The placeholder moves to `004_to_005.sql`.
+  See
+  storage/v1/README.md, "Migrations".
+
 ## [0.49.0]
 
 Unreleased review candidate; no producer cutover or historical rewrite.

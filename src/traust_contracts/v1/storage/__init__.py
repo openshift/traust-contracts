@@ -9,4 +9,11 @@ from traust_contracts.v1.storage.store import (
     binding_id,
 )
 
-__all__ = ["Binding", "BindingRecord", "IngestError", "IngestResult", "Store", "binding_id"]
+__all__ = [
+    "Binding",
+    "BindingRecord",
+    "IngestError",
+    "IngestResult",
+    "Store",
+    "binding_id",
+]

@@ -8,6 +8,7 @@ from .sql import (
     Dialect,
     bootstrap_files,
     bootstrap_statements,
+    migration_files,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "Dialect",
     "bootstrap_files",
     "bootstrap_statements",
+    "migration_files",
 ]

@@ -6,6 +6,8 @@ SELECT artifact_digest,
        layer_id,
        supersedes_binding_id,
        bound_at,
-       artifact_role
+       artifact_role,
+       product_repo_id,
+       commit_sha
 FROM traust_storage.artifact_binding
 WHERE binding_id = %(binding_id)s;

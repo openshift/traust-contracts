@@ -21,7 +21,9 @@ from conftest import (
 from storage_samples import (
     ALL_SECONDARY_PROJECTION_TABLES,
     FAMILIES,
+    INVENTORY_TABLES,
     PROJECTION_TABLES,
+    REGISTRY_TABLES,
     RUN_BOUND,
     encode,
     sample,
@@ -31,6 +33,8 @@ from traust_contracts.v1.storage import Binding, IngestError, Store
 from traust_contracts.v1.storage.sql import REVISION
 
 TABLES = {
+    *REGISTRY_TABLES,
+    *INVENTORY_TABLES,
     "artifact_binding",
     "artifact_evidence",
     "artifact_location",
@@ -451,3 +455,128 @@ def test_postgres_projects_and_orders_owasp_ratings(database: tuple[Any, str]) -
     assert json.loads(json.dumps(current["T2"][-7]))["severity"] == "high"
     exposure = store.query_threat_exposure(["local"])
     assert {row[-1] for row in exposure} == {"high", None}
+
+
+def _pg_registry_owner(store: Store, product: str = "rhacm") -> str:
+    return store.register_product_repo(
+        store.register_product(product),
+        store.register_repo("https://github.com/stolostron/acm-cli"),
+    )
+
+
+def _pg_cumulative(owner: str, supersedes: str | None = None) -> Binding:
+    return Binding(
+        subject_id="findings/rhacm/acm-cli",
+        run_id="corpus:run:findings/rhacm/acm-cli",
+        supersedes_binding_id=supersedes,
+        role="cumulative",
+        product_repo_id=owner,
+    )
+
+
+def test_postgres_registry_foreign_keys(database: tuple[Any, str]) -> None:
+    conn, _ = database
+    store = Store(conn)
+    store.init()
+    with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
+        store.register_product_repo("missing-product", "missing-repo")
+    payload, _ = sample("report")
+    with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
+        store.ingest("report", payload, _pg_cumulative("missing-product-repo"))
+    owner = _pg_registry_owner(store)
+    assert _pg_registry_owner(store) == owner
+    result = store.ingest("report", payload, _pg_cumulative(owner))
+    assert store.get_binding(result.binding_id).binding.product_repo_id == owner
+
+
+def test_postgres_one_current_findings_current_per_product_repo(
+    database: tuple[Any, str],
+) -> None:
+    conn, _ = database
+    store = Store(conn)
+    store.init()
+    owner = _pg_registry_owner(store)
+    payload, _ = sample("report")
+    first = store.ingest("report", payload, _pg_cumulative(owner))
+    changed = json.loads(payload)
+    changed["remediation_roadmap"].append(dict(changed["remediation_roadmap"][0]))
+    with pytest.raises(IngestError, match=r"(?i)unique"):
+        store.ingest("report", encode(changed), _pg_cumulative(owner))
+    second = store.ingest("report", encode(changed), _pg_cumulative(owner, first.binding_id))
+    rows = conn.execute(
+        "SELECT binding_id FROM current_binding WHERE artifact_role = 'cumulative'"
+    ).fetchall()
+    conn.commit()
+    assert rows == [(second.binding_id,)]
+
+
+def _pg_shape(conn: Any) -> dict[str, list[tuple[Any, ...]]]:
+    """Columns by name, FKs, indexes, views -- column order is ignored (ALTER appends)."""
+    columns = conn.execute(
+        "SELECT table_name, column_name, data_type, is_nullable, column_default "
+        "FROM information_schema.columns WHERE table_schema = 'traust_storage' ORDER BY 1, 2"
+    ).fetchall()
+    indexes = conn.execute(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'traust_storage' ORDER BY 1"
+    ).fetchall()
+    foreign_keys = conn.execute(
+        "SELECT conrelid::regclass::text, pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE contype = 'f' AND connamespace = 'traust_storage'::regnamespace ORDER BY 1, 2"
+    ).fetchall()
+    # PostgreSQL stores b.* expanded in the table's physical column order, which
+    # differs after ALTER TABLE ADD COLUMN; compare each definition's lines unordered.
+    views = [
+        (name, sorted(definition.splitlines()))
+        for name, definition in conn.execute(
+            "SELECT viewname, definition FROM pg_views "
+            "WHERE schemaname = 'traust_storage' ORDER BY 1"
+        ).fetchall()
+    ]
+    conn.commit()
+    return {"columns": columns, "indexes": indexes, "foreign_keys": foreign_keys, "views": views}
+
+
+@pytest.mark.parametrize("revision", range(REVISION))
+def test_postgres_migrate_from_any_revision_matches_a_fresh_database(
+    database: tuple[Any, str], revision: int
+) -> None:
+    from pathlib import Path
+
+    conn, _ = database
+    Store(conn).init()
+    expected = _pg_shape(conn)
+    conn.execute("DROP SCHEMA traust_storage CASCADE")
+    conn.commit()
+    if revision:
+        fixture = (
+            Path(__file__).parent / "fixtures" / "storage" / f"revision_{revision}.postgres.sql"
+        )
+        conn.execute(fixture.read_text(encoding="utf-8"))
+        conn.execute(
+            "INSERT INTO traust_storage.traust_storage_meta VALUES (1, 'v1', %s, now())",
+            (revision,),
+        )
+        conn.commit()
+        with pytest.raises(IngestError, match="explicit migration"):
+            Store(conn).init()
+    assert Store(conn).migrate() == revision
+    Store(conn).init()
+    assert _pg_shape(conn) == expected
+
+
+def test_postgres_inventory_tables(database: tuple[Any, str]) -> None:
+    conn, _ = database
+    store = Store(conn)
+    store.init()
+    owner = _pg_registry_owner(store)
+    store.register_product_repo_version(owner, "2.15", "Operator", ["storage"], ["a", "b"])
+    store.register_product_repo_version(owner, "2.15", "Operator", None, ["c"])
+    store.register_repo_owner(owner, "Stolostron / ACM", individuals=["x"])
+    rows = conn.execute(
+        "SELECT v.images, o.individuals FROM product_repo_version v "
+        "JOIN repo_owner o ON o.product_repo_id = v.product_repo_id"
+    ).fetchall()
+    conn.commit()
+    assert rows == [(["c"], ["x"])]
+    with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
+        store.register_repo_owner("0" * 64, "team")

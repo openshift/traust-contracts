@@ -6,10 +6,12 @@ import hashlib
 import json
 import re
 import sqlite3
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
+from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
@@ -22,7 +24,9 @@ from traust_contracts.v1.storage.sql import (
     Dialect,
     bootstrap_files,
     bootstrap_statements,
+    migration_files,
     query,
+    view_names,
 )
 
 SQLValue = str | int | float | bytes | None
@@ -308,6 +312,13 @@ class Binding:
     #: ``baseline`` audit vs the ``cumulative`` disposition-aware restatement.
     #: Allowed values come from the artifact's ``roles`` in profiles.json.
     role: str | None = None
+    #: The registered product_repo that owns this artifact (a foreign key, so it
+    #: must exist). Not part of the binding identity; must match across a
+    #: supersession.
+    product_repo_id: str | None = None
+    #: The commit the artifact describes. A fact about the run: not part of the
+    #: binding identity and free to change across a supersession.
+    commit_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -536,6 +547,28 @@ def _skip_reason(finding: dict[str, Any]) -> str | None:
     return None
 
 
+def _text(field: str, value: str | None, required: bool = False) -> str | None:
+    """Validate an optional text attribute: NUL-free; empty only when not required."""
+    if value is None:
+        if required:
+            raise IngestError(f"{field}: required value missing")
+        return None
+    if required and value == "":
+        raise IngestError(f"{field}: required value missing")
+    _identifier_bytes(field, value)
+    return value
+
+
+def _text_list(field: str, values: Sequence[str] | None) -> str | None:
+    """Encode a list of text attributes as a JSON array; None or empty stays NULL."""
+    if values is None:
+        return None
+    if isinstance(values, str):
+        raise IngestError(f"{field}: expected a list of strings")
+    items = [_text(field, value, required=True) for value in values]
+    return _json_or_none(items) if items else None
+
+
 def _json_or_none(value: Any) -> str | None:
     """Encode a nested block for a JSON column, canonically. None stays None."""
     if value is None:
@@ -664,36 +697,105 @@ class Store:
         self._idle()
         self._begin()
         try:
-            if self.dialect == "postgres":
-                self._execute(query(self.dialect, "traust_storage_meta.lock.sql"))
-            exists = self._execute(query(self.dialect, "traust_storage_meta.exists.sql")).fetchone()
-            row = (
-                self._execute(query(self.dialect, "traust_storage_meta.get.sql")).fetchone()
-                if exists and exists[0]
-                else None
-            )
+            row = self._meta_row()
             if row and (row[0] != CONTRACT_VERSION or row[1] != REVISION):
                 raise IngestError(
                     f"database storage {row[0]} revision {row[1]}; "
                     f"package {CONTRACT_VERSION} revision {REVISION}: "
-                    "explicit migration required; automatic upgrades/downgrades are not supported"
+                    "explicit migration required (Store.migrate()); "
+                    "automatic upgrades/downgrades are not supported"
                 )
             if not row:
                 for path in bootstrap_files(self.dialect):
-                    for statement in bootstrap_statements(self.dialect, path):
-                        self._execute(statement)
-                self._execute(
-                    query(self.dialect, "traust_storage_meta.upsert.sql"),
-                    {
-                        "contract_version": CONTRACT_VERSION,
-                        "revision": REVISION,
-                        "applied_at": datetime.now(UTC).isoformat(),
-                    },
-                )
+                    self._run_file(path)
+                self._stamp()
             self.conn.execute("COMMIT")
         except Exception as error:
             rollback_error = self._rollback()
             raise IngestError(f"storage init: {_error_detail(error)}{rollback_error}") from None
+
+    def migrate(self) -> int:
+        """Bring a database from any revision (0 = empty) to ``REVISION`` in one transaction.
+
+        Returns the revision it started from. An empty database is bootstrapped.
+        Otherwise the schema and view files are written to run again, so a
+        migration is: drop the views storage owns, create tables that do not
+        exist yet, apply each delta file (ALTER/DROP/UPDATE only), re-run every
+        bootstrap file, then stamp the revision. Nothing is written if any step
+        fails.
+        """
+        self._idle()
+        self._begin()
+        try:
+            row = self._meta_row()
+            files = bootstrap_files(self.dialect)
+            if not row:
+                for path in files:
+                    self._run_file(path)
+                self._stamp()
+                self.conn.execute("COMMIT")
+                return 0
+            version, revision = row[0], row[1]
+            if version != CONTRACT_VERSION:
+                raise IngestError(f"database storage {version}; package {CONTRACT_VERSION}")
+            if revision > REVISION:
+                raise IngestError(f"database revision {revision} is newer than {REVISION}")
+            if revision < REVISION:
+                try:
+                    deltas = migration_files(self.dialect, revision)
+                except FileNotFoundError as error:
+                    raise IngestError(str(error)) from None
+                for name in reversed(view_names(self.dialect)):
+                    self._execute(self._drop_view_sql(name))
+                for path in files:
+                    if path.parent.name == "schema" and not self._table_exists(path.stem):
+                        self._run_file(path)
+                for path in deltas:
+                    self._run_file(path)
+                for path in files:
+                    self._run_file(path)
+                self._stamp()
+            self.conn.execute("COMMIT")
+            return revision
+        except Exception as error:
+            rollback_error = self._rollback()
+            raise IngestError(f"storage migrate: {_error_detail(error)}{rollback_error}") from None
+
+    def _meta_row(self) -> tuple[Any, ...] | None:
+        if self.dialect == "postgres":
+            self._execute(query(self.dialect, "traust_storage_meta.lock.sql"))
+        exists = self._execute(query(self.dialect, "traust_storage_meta.exists.sql")).fetchone()
+        if not (exists and exists[0]):
+            return None
+        return self._execute(query(self.dialect, "traust_storage_meta.get.sql")).fetchone()
+
+    def _stamp(self) -> None:
+        self._execute(
+            query(self.dialect, "traust_storage_meta.upsert.sql"),
+            {
+                "contract_version": CONTRACT_VERSION,
+                "revision": REVISION,
+                "applied_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    def _run_file(self, path: Path) -> None:
+        for statement in bootstrap_statements(self.dialect, path):
+            self._execute(statement)
+
+    def _drop_view_sql(self, name: str) -> str:
+        return f"DROP VIEW IF EXISTS {name}" + (" CASCADE" if self.dialect == "postgres" else "")
+
+    def _table_exists(self, table: str) -> bool:
+        if self.dialect == "postgres":
+            row = self._execute(
+                "SELECT to_regclass(%(name)s)", {"name": f"traust_storage.{table}"}
+            ).fetchone()
+            return row is not None and row[0] is not None
+        row = self._execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name", {"name": table}
+        ).fetchone()
+        return row is not None
 
     def get_binding(self, binding_id_value: str) -> BindingRecord:
         """Return one binding without interpreting its evidence."""
@@ -722,6 +824,145 @@ class Store:
             raise IngestError(
                 f"storage binding read: {_error_detail(error)}{rollback_error}"
             ) from None
+
+    def register_product(self, slug: str, segment: str | None = None) -> str:
+        """Register a product by slug, idempotently; return its product_id.
+
+        ``segment`` is a descriptive inventory attribute: re-registering sets it.
+        """
+        return self._register(
+            "product",
+            {"slug": _text("slug", slug, required=True), "segment": _text("segment", segment)},
+            ("slug",),
+        )
+
+    def register_repo(self, repo_url: str) -> str:
+        """Register a repo by exact repo_url, idempotently; return its repo_id."""
+        return self._register(
+            "repo", {"repo_url": _text("repo_url", repo_url, required=True)}, ("repo_url",)
+        )
+
+    def register_product_repo(
+        self,
+        product_id: str,
+        repo_id: str,
+        ref: str = "",
+        sub_service: str | None = None,
+        resource_type: str | None = None,
+    ) -> str:
+        """Register a repo as a product ships it (ref '' = default branch); return its id.
+
+        Product and repo must be registered. ``sub_service`` and ``resource_type``
+        are descriptive inventory attributes: re-registering sets them.
+        """
+        if ref is None:
+            raise IngestError("ref: expected string ('' for the default branch)")
+        return self._register(
+            "product_repo",
+            {
+                "product_id": _text("product_id", product_id, required=True),
+                "repo_id": _text("repo_id", repo_id, required=True),
+                "ref": _text("ref", ref),
+                "sub_service": _text("sub_service", sub_service),
+                "resource_type": _text("resource_type", resource_type),
+            },
+            ("product_id", "repo_id", "ref"),
+        )
+
+    def find_product_repo(self, slug: str, repo_url: str, ref: str = "") -> str | None:
+        """Return the product_repo_id for (product slug, repo_url, ref), or None.
+
+        Reads only: unlike ``register_product_repo`` it never creates rows, so a
+        caller can reject what the registry does not know.
+        """
+        self._idle()
+        self._begin()
+        try:
+            row = self._execute(
+                query(self.dialect, "product_repo.find.sql"),
+                {"slug": slug, "repo_url": repo_url, "ref": ref},
+            ).fetchone()
+            self.conn.execute("COMMIT")
+            return row[0] if row else None
+        except Exception as error:
+            rollback_error = self._rollback()
+            raise IngestError(
+                f"find product_repo: {_error_detail(error)}{rollback_error}"
+            ) from None
+
+    def register_product_repo_version(
+        self,
+        product_repo_id: str,
+        version: str,
+        category: str | None = None,
+        cluster_operators: Sequence[str] | None = None,
+        images: Sequence[str] | None = None,
+    ) -> None:
+        """Record that a product version ships a product_repo; re-registering refreshes it."""
+        self._write(
+            "product_repo_version",
+            {
+                "product_repo_id": product_repo_id,
+                "version": _text("version", version, required=True),
+                "category": _text("category", category),
+                "cluster_operators": _text_list("cluster_operators", cluster_operators),
+                "images": _text_list("images", images),
+            },
+        )
+
+    def register_repo_owner(
+        self,
+        product_repo_id: str,
+        team: str,
+        manager: str | None = None,
+        individuals: Sequence[str] | None = None,
+        source: str | None = None,
+        jira_project: str | None = None,
+        jira_component: str | None = None,
+    ) -> None:
+        """Record a team that owns a product_repo; re-registering refreshes it."""
+        self._write(
+            "repo_owner",
+            {
+                "product_repo_id": product_repo_id,
+                "team": _text("team", team, required=True),
+                "manager": _text("manager", manager),
+                "individuals": _text_list("individuals", individuals),
+                "source": _text("source", source),
+                "jira_project": _text("jira_project", jira_project),
+                "jira_component": _text("jira_component", jira_component),
+            },
+        )
+
+    def _register(self, table: str, values: dict[str, str | None], key: tuple[str, ...]) -> str:
+        """Insert or refresh a registry row by its natural key; return the stored id."""
+        stored = self._write(table, {f"{table}_id": str(uuid.uuid4()), **values}, key)
+        if stored is None:
+            raise IngestError(f"register {table}: row not found after upsert")
+        return stored
+
+    def _write(
+        self, table: str, values: dict[str, str | None], key: tuple[str, ...] = ()
+    ) -> str | None:
+        """Upsert one row on its natural key; with ``key``, read back and return its id."""
+        self._idle()
+        self._begin()
+        try:
+            self._execute(
+                query(self.dialect, f"{table}.upsert.sql"),
+                {**values, "registered_at": datetime.now(UTC).isoformat()},
+            )
+            stored = None
+            if key:
+                row = self._execute(
+                    query(self.dialect, f"{table}.get.sql"), {field: values[field] for field in key}
+                ).fetchone()
+                stored = row[0]
+            self.conn.execute("COMMIT")
+            return stored
+        except Exception as error:
+            rollback_error = self._rollback()
+            raise IngestError(f"register {table}: {_error_detail(error)}{rollback_error}") from None
 
     def ingest(
         self,
@@ -801,6 +1042,8 @@ class Store:
                     "layer_id": binding.layer_id,
                     "supersedes_binding_id": binding.supersedes_binding_id,
                     "bound_at": datetime.now(UTC).isoformat(),
+                    "product_repo_id": binding.product_repo_id,
+                    "commit_sha": binding.commit_sha,
                 },
             )
             context = f"artifact {artifact}, table artifact_location"
@@ -1073,7 +1316,15 @@ class Store:
         if binding.scope_id == "":
             raise IngestError("scope_id: required value missing")
         _identifier_bytes("scope_id", binding.scope_id)
-        for field in ("subject_id", "run_id", "layer_id", "supersedes_binding_id", "role"):
+        for field in (
+            "subject_id",
+            "run_id",
+            "layer_id",
+            "supersedes_binding_id",
+            "role",
+            "product_repo_id",
+            "commit_sha",
+        ):
             value = getattr(binding, field)
             if value is not None:
                 _identifier_bytes(field, value)
@@ -1110,12 +1361,24 @@ class Store:
 
     @staticmethod
     def _binding_record(binding_id_value: str, row: tuple[Any, ...]) -> BindingRecord:
-        digest, name, scope, subject, run, layer, supersedes, bound_at, role = row
+        (
+            digest,
+            name,
+            scope,
+            subject,
+            run,
+            layer,
+            supersedes,
+            bound_at,
+            role,
+            product_repo,
+            commit,
+        ) = row
         return BindingRecord(
             binding_id_value,
             digest,
             name,
-            Binding(scope, subject, run, layer, supersedes, role),
+            Binding(scope, subject, run, layer, supersedes, role, product_repo, commit),
             str(bound_at),
         )
 
@@ -1150,6 +1413,7 @@ class Store:
             binding.run_id,
             binding.layer_id,
             binding.role,
+            binding.product_repo_id,
         )
         actual = (
             predecessor.artifact_name,
@@ -1158,6 +1422,7 @@ class Store:
             predecessor.binding.run_id,
             predecessor.binding.layer_id,
             predecessor.binding.role,
+            predecessor.binding.product_repo_id,
         )
         if actual != expected:
             raise IngestError("superseded artifact binding context mismatch")

@@ -9,14 +9,18 @@ from pathlib import Path
 from storage_samples import (
     ALL_SECONDARY_PROJECTION_TABLES,
     FAMILIES,
+    INVENTORY_TABLES,
     PROJECTION_TABLES,
+    REGISTRY_TABLES,
     RUN_BOUND,
 )
 
 from traust_contracts.paths import storage_dir
-from traust_contracts.v1.storage.sql import bootstrap_files, bootstrap_statements
+from traust_contracts.v1.storage.sql import REVISION, bootstrap_files, bootstrap_statements
 
 TABLES = {
+    *REGISTRY_TABLES,
+    *INVENTORY_TABLES,
     "artifact_evidence",
     "artifact_binding",
     "artifact_location",
@@ -25,6 +29,20 @@ TABLES = {
     *ALL_SECONDARY_PROJECTION_TABLES,
 }
 POSTGRES_SCHEMA = "traust_storage"
+
+
+def test_storage_revision_matches_migration_placeholder() -> None:
+    # Revision 2 added artifact_binding.artifact_role and artifact_location.
+    # Revision 3 added report_finding.blocked_external.
+    # Revision 4 added the product -> repo registry.
+    # Every step from revision 1 has a delta file, so Store.migrate() can always
+    # build up to REVISION; the next step's file exists as a placeholder.
+    assert REVISION == 4
+    for dialect in ("sqlite", "postgres"):
+        migrations = storage_dir() / dialect / "migrations"
+        assert sorted(p.name for p in migrations.glob("*.sql")) == [
+            f"{step:03d}_to_{step + 1:03d}.sql" for step in range(1, REVISION + 1)
+        ]
 
 
 POSTGRES_RELATIONS = {
@@ -327,7 +345,12 @@ def test_storage_package_resources() -> None:
     assert (root / "profiles.json").is_file()
     for dialect in ["postgres", "sqlite"]:
         files = bootstrap_files(dialect)
-        expected_prefix = ["artifact_evidence.sql", "artifact_binding.sql", "artifact_location.sql"]
+        expected_prefix = [
+            *(f"{table}.sql" for table in REGISTRY_TABLES),
+            "artifact_evidence.sql",
+            "artifact_binding.sql",
+            "artifact_location.sql",
+        ]
         if dialect == "postgres":
             expected_prefix.insert(0, "namespace.sql")
         assert [path.name for path in files[: len(expected_prefix)]] == expected_prefix

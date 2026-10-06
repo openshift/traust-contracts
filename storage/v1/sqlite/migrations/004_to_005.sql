@@ -1,0 +1,4 @@
+-- Placeholder for storage v1 revision 4 -> 5.
+--
+-- Deltas only (ALTER / DROP / data UPDATE). New tables, indexes and views
+-- belong in schema/ and views/; Store.migrate() re-runs those files.

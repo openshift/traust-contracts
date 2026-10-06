@@ -10,7 +10,10 @@ from traust_contracts.v1.sql import bootstrap_files as _bootstrap_files
 from traust_contracts.v1.sql import bootstrap_statements as bootstrap_statements
 
 CONTRACT_VERSION = "v1"
-REVISION = 1
+#: Ledger schema revision. 2: layers.product_repo_id, a foreign key into
+#: traust_storage.product_repo (storage must be initialized first, same database).
+#: migrations/001_to_002.sql upgrades in place.
+REVISION = 2
 POSTGRES_SCHEMA = "traust_ledger"
 # Foreign-key dependency order; this is the complete v1 table inventory.
 TABLE_ORDER: tuple[str, ...] = (
@@ -26,3 +29,15 @@ def bootstrap_files(dialect: Dialect, version: str = "v1") -> list[Path]:
     return _bootstrap_files(
         ledger_dir(version), dialect, first_tables=TABLE_ORDER, exact_tables=True
     )
+
+
+def migration_files(dialect: Dialect, from_revision: int, version: str = "v1") -> list[Path]:
+    """Return the delta files that take ``from_revision`` to ``REVISION``, in order."""
+    directory = ledger_dir(version) / dialect / "migrations"
+    paths = [
+        directory / f"{step:03d}_to_{step + 1:03d}.sql" for step in range(from_revision, REVISION)
+    ]
+    missing = [path.name for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"missing ledger {dialect} migration: {', '.join(missing)}")
+    return paths
