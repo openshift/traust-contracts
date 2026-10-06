@@ -111,6 +111,11 @@ class Git:
     def rev_parse(self, ref: str) -> str:
         return self._run("git", "rev-parse", ref, capture=True).stdout.strip()
 
+    def commits_between(self, old: str, new: str) -> int:
+        """How many commits on `new` aren't on `old` -- 0 if `old` IS `new`."""
+        out = self._run("git", "rev-list", "--count", f"{old}..{new}", capture=True).stdout.strip()
+        return int(out) if out.isdigit() else 0
+
     def is_descendant_of(self, ref: str) -> bool:
         """True if HEAD is ref itself or strictly ahead of it (ref is an ancestor)."""
         return (
@@ -623,14 +628,25 @@ def cmd_status() -> int:
             pinned = writer.current_pin(dep) or "?"
             pinned_short = pinned if not re.match(r"^[0-9a-f]{7,40}$", pinned) else short(pinned)
             is_sha = bool(re.match(r"^[0-9a-f]{7,40}$", pinned))
-            # Reachability, not equality: a "merge commit" strategy mints a new
-            # tip sha on every merge, so pinned == origin/main would almost
-            # never hold even for a pin that's perfectly current.
-            current = pinned == upstream_full or (
-                is_sha and dep_git.ancestor_of(pinned, "origin/main")
-            )
-            flag = "" if current else " DRIFT"
-            drift.append(f"{dep}=origin/main:{upstream}{flag} (pinned {pinned_short})")
+
+            # Three states, not two -- reachability answers "is this pin
+            # valid" (never flips back to no once true), a SEPARATE question
+            # from "is this pin current" (sha equality -- flips to no the
+            # moment origin/main gets one more commit, merge or not):
+            #   CURRENT  - pinned IS origin/main's tip, nothing to do
+            #   BEHIND   - pinned is reachable but main has moved on; valid,
+            #              not broken, just means a `bump` would pick up new
+            #              commits -- informational, not an error
+            #   DANGLING - pinned isn't reachable at all (squash/rebase
+            #              orphaned it) -- the only state `reconcile` acts on
+            if pinned == upstream_full:
+                state = "CURRENT"
+            elif is_sha and dep_git.ancestor_of(pinned, "origin/main"):
+                n = dep_git.commits_between(pinned, "origin/main")
+                state = f"BEHIND({n})"
+            else:
+                state = "DANGLING"
+            drift.append(f"{dep}=origin/main:{upstream} (pinned {pinned_short}, {state})")
         print(f"{hop.name}: HEAD {short(local)}{checkout_note}  pins: " + ", ".join(drift))
     return 0
 
