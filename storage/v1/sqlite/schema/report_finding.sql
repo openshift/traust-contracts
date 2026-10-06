@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS report_finding (
     source_findings TEXT CHECK (source_findings IS NULL OR json_valid(source_findings)),
     passes TEXT CHECK (passes IS NULL OR json_valid(passes)),
     remediation_effort TEXT,
+    blocked_external INTEGER,
     pqc_classification TEXT,
     fingerprint_algo TEXT,
     isolation_boundary TEXT,

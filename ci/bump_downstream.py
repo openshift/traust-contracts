@@ -543,7 +543,8 @@ def reconcile_hop(hop: Hop, state: dict[str, dict]) -> None:
         if own_info["state"] == "MERGED":
             print(
                 f"{hop.name}: its own PR #{hop_record['pr']} already merged too -- "
-                f"run `bump {hop.name.removeprefix('traust-')}` fresh to open a new reconciliation PR"
+                f"run `bump {hop.name.removeprefix('traust-')}` fresh to open "
+                "a new reconciliation PR"
             )
             return
         if git.dirty:

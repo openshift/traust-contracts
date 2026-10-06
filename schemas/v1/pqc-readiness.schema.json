@@ -189,10 +189,16 @@
               "trivial",
               "moderate",
               "significant",
-              "blocked-external"
+              "blocked-external",
+              "xs",
+              "s",
+              "m",
+              "l",
+              "xl"
             ],
-            "$comment": "v1.3 (plan 4.5): deterministic provenance x agility mapping via tables/pqc-readiness-decision-tree.json"
+            "$comment": "Historical labels follow the existing v1.3 provenance x agility mapping. The xs–xl size labels have no assigned legacy replacement mapping."
           },
+          "blocked_external": {},
           "blast_radius": {
             "enum": [
               "fleet",
@@ -370,9 +376,15 @@
               "trivial",
               "moderate",
               "significant",
-              "blocked-external"
+              "blocked-external",
+              "xs",
+              "s",
+              "m",
+              "l",
+              "xl"
             ]
           },
+          "blocked_external": { "type": "boolean" },
           "blast_radius": {
             "enum": [
               "fleet",
@@ -495,6 +507,34 @@
           "$comment": "count of non-na checks the score was computed over (calibration: na-dominated repos need an explicit denominator)"
         }
       }
+    }
+  },
+  "$defs": {
+    "canonical_write": {
+      "description": "Opt-in known-size write contract; historical clock extras remain readable.",
+      "allOf": [
+        { "$ref": "#" },
+        {
+          "properties": {
+            "clock_items": {
+              "items": {
+                "properties": {
+                  "remediation_effort": { "$ref": "report.schema.json#/$defs/effort" },
+                  "blocked_external": { "type": "boolean" }
+                }
+              }
+            },
+            "remediations": {
+              "items": {
+                "properties": {
+                  "remediation_effort": { "$ref": "report.schema.json#/$defs/effort" },
+                  "blocked_external": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

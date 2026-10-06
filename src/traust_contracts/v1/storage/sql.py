@@ -12,9 +12,9 @@ CONTRACT_VERSION = "v1"
 #: Storage schema revision, stamped in traust_storage_meta and checked on
 #: open. Bump it whenever the DDL changes, so a database created under an
 #: older schema is refused instead of failing on its first read or write.
-#: 2: artifact_binding.artifact_role and artifact_location (0.48.0). No
-#: 1 -> 2 migration ships; a revision-1 database must be recreated.
-REVISION = 2
+#: 3: nullable report_finding.blocked_external (0.49.0). No live database
+#: migration ships; init refuses older revisions without altering them.
+REVISION = 3
 
 
 @cache

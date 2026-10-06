@@ -159,3 +159,19 @@ def report_with_findings() -> bytes:
         },
     ]
     return encode(document)
+
+
+def report_with_external_blocking() -> bytes:
+    """Independent true/false flags and an unmapped historical blocking label."""
+    document = json.loads(report_with_findings())
+    document["findings"][0].update(remediation_effort="m", blocked_external=True)
+    document["findings"][1].update(remediation_effort="m", blocked_external=False)
+    document["findings"].append(
+        {
+            **document["findings"][1],
+            "id": "FIND-003",
+            "remediation_effort": "blocked-external",
+        }
+    )
+    del document["findings"][2]["blocked_external"]
+    return encode(document)

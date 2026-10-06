@@ -15,6 +15,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
+from referencing.exceptions import Unresolvable
 
 SCHEMA_DIR = Path(__file__).parent / "schemas" / "v1"
 
@@ -34,10 +35,11 @@ def build_registry() -> Registry:
 
 
 def validate_artifact(schema_name: str, artifact_path: Path) -> bool:
-    """Validate artifact against schema. Return True if valid."""
-    schema_file = SCHEMA_DIR / f"{schema_name}.schema.json"
+    """Validate artifact against a schema basename and optional JSON Pointer fragment."""
+    basename, separator, fragment = schema_name.partition("#")
+    schema_file = SCHEMA_DIR / f"{basename}.schema.json"
     if not schema_file.exists():
-        print(f"{artifact_path}: schema not found: {schema_name}.schema.json")
+        print(f"{artifact_path}: schema not found: {basename}.schema.json")
         return False
 
     try:
@@ -48,6 +50,14 @@ def validate_artifact(schema_name: str, artifact_path: Path) -> bool:
         return False
 
     registry = build_registry()
+    if separator:
+        reference = schema["$id"] + "#" + fragment
+        try:
+            registry.resolver().lookup(reference)
+        except Unresolvable as error:
+            print(f"{artifact_path}: invalid schema selector {schema_name!r}: {error}")
+            return False
+        schema = {"$schema": schema["$schema"], "$ref": reference}
     validator = Draft202012Validator(schema, registry=registry)
 
     valid = True

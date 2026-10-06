@@ -1,7 +1,7 @@
 """Compatibility gates for schema versioning.
 
-Breaking-change gate: no property removal, enum shrinkage, or new required
-fields versus the previous git tag.
+Breaking-change gate: property/required guards, finite-domain narrowing,
+and restrictions on previously open values versus the previous git tag.
 
 The vector-hash gate that pinned the golden-vector suite to a deterministic
 digest was removed with the suite itself on 2026-08-18 (only the harness computes
@@ -14,9 +14,10 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = REPO_ROOT / "schemas" / "v1"
@@ -55,7 +56,16 @@ class TestBreakingChangeDetection:
                 pointer = "/" + "/".join(str(p) for p in current_path) if current_path else ""
                 results.append((pointer, node))
                 for key, value in node.items():
-                    if key not in ("$schema", "$id", "title", "description", "examples"):
+                    if key not in (
+                        "$schema",
+                        "$id",
+                        "title",
+                        "description",
+                        "examples",
+                        "const",
+                        "enum",
+                        "default",
+                    ):
                         walk(value, [*current_path, key])
             elif isinstance(node, list):
                 for i, item in enumerate(node):
@@ -72,11 +82,66 @@ class TestBreakingChangeDetection:
         return set()
 
     @staticmethod
-    def _collect_enum_values(node: dict) -> set:
-        """Collect enum values from a schema node."""
-        if "enum" in node and isinstance(node["enum"], list):
-            return set(node["enum"])
-        return set()
+    def _finite_values(node: dict) -> list | None:
+        """Keep JSON values intact: arrays/objects are valid const/enum members."""
+        if "const" in node:
+            return [node["const"]]
+        if isinstance(node.get("enum"), list):
+            return node["enum"]
+        return None
+
+    @staticmethod
+    def _value_restrictions(old, current, old_schema: dict, current_schema: dict) -> list[str]:
+        """Compare local value constraints, not arbitrary JSON Schema containment.
+
+        Finite old domains can be checked exactly, including const lists and
+        const -> enum/anyOf widening. Other changed constraints on formerly
+        open values require review; combinators/refs need their enclosing context.
+        """
+        old_validator = Draft202012Validator(old_schema).evolve(schema=old)
+        new_validator = Draft202012Validator(current_schema).evolve(schema=current)
+        finite = TestBreakingChangeDetection._finite_values(old) if isinstance(old, dict) else None
+        if finite is not None:
+            rejected = [
+                value
+                for value in finite
+                if old_validator.is_valid(value) and not new_validator.is_valid(value)
+            ]
+            return [f"previously allowed finite values rejected: {rejected!r}"] if rejected else []
+        if old is False or current is True or current == {}:
+            return []
+        if current is False:
+            return ["previously open values prohibited (review required for enclosing constraints)"]
+        annotations = {
+            "$schema",
+            "$id",
+            "$defs",
+            "title",
+            "description",
+            "examples",
+            "default",
+            "deprecated",
+            "readOnly",
+            "writeOnly",
+            "$comment",
+        }
+        old_constraints = {
+            key: value
+            for key, value in (old if isinstance(old, dict) else {}).items()
+            if key not in annotations
+        }
+        new_constraints = {key: value for key, value in current.items() if key not in annotations}
+        changed = [
+            key
+            for key, value in new_constraints.items()
+            if key not in old_constraints or old_constraints[key] != value
+        ]
+        if not changed:
+            return []
+        return [
+            f"changed constraints on previously open values: {sorted(changed)} "
+            "(review required: local comparison cannot prove containment through refs/combinators)"
+        ]
 
     @staticmethod
     def _collect_conditional_required(schema: dict) -> set:
@@ -144,11 +209,10 @@ class TestBreakingChangeDetection:
     def _defs_reachable_only_via_new_properties(current: dict, old: dict) -> set:
         """Names of `$defs` that no artifact of the OLD schema could reach.
 
-        A `$def` qualifies only when EVERY reference chain from the root to it
-        passes through a property absent from the old schema. Given
-        `additionalProperties: false`, an old artifact cannot carry a property
-        that did not exist, so a conditional requirement inside such a def can
-        never invalidate one.
+        A `$def` qualifies when unreferenced, or when EVERY reference chain
+        from the root crosses a property forbidden by the OLD parent:
+        `additionalProperties: false` with no patternProperties. Absence
+        from `properties` alone does not forbid a value on an open object.
 
         Deliberately strict: reachable via even one pre-existing property (even
         an optional one, since an old artifact may well have populated it) and
@@ -174,6 +238,7 @@ class TestBreakingChangeDetection:
             return found
 
         old_props = property_pointers(old)
+        old_nodes = dict(TestBreakingChangeDetection._walk_schema(old, []))
         # (def_name -> set of bools: did this reference chain cross a new property?)
         arrivals: dict[str, set] = {}
 
@@ -194,7 +259,14 @@ class TestBreakingChangeDetection:
                         for name, sub in value.items():
                             sub_path = [*path, "properties", name]
                             ptr = "/" + "/".join(sub_path)
-                            is_new = crossed_new or ptr not in old_props
+                            parent_pointer = "/" + "/".join(path) if path else ""
+                            old_parent = old_nodes.get(parent_pointer, {})
+                            impossible_before = (
+                                ptr not in old_props
+                                and old_parent.get("additionalProperties") is False
+                                and not old_parent.get("patternProperties")
+                            )
+                            is_new = crossed_new or impossible_before
                             walk(sub, sub_path, is_new, seen)
                         continue
                     walk(value, [*path, str(key)], crossed_new, seen)
@@ -203,11 +275,10 @@ class TestBreakingChangeDetection:
                     walk(item, [*path, str(i)], crossed_new, seen)
 
         walk(current, [], False, frozenset())
-        old_defs = set((old.get("$defs") or {}).keys())
         return {
             name
-            for name, flags in arrivals.items()
-            if name not in old_defs and flags and all(flags)
+            for name in (current.get("$defs") or {})
+            if name not in arrivals or all(arrivals[name])
         }
 
     @staticmethod
@@ -217,20 +288,129 @@ class TestBreakingChangeDetection:
             return set(node["required"])
         return set()
 
+    @classmethod
+    def _compare_schemas(cls, old_schema: dict, current_schema: dict, schema_name: str) -> list:
+        """Return restrictions/review findings consumed by the CI breaking-change gate."""
+        breaking_changes = []
+        old_nodes = dict(cls._walk_schema(old_schema, []))
+        current_nodes = dict(cls._walk_schema(current_schema, []))
+        unreachable = cls._defs_reachable_only_via_new_properties(current_schema, old_schema)
+        unreachable_properties = {
+            f"{path}/properties/{name}"
+            for path, node in old_nodes.items()
+            if node.get("additionalProperties") is False and not node.get("patternProperties")
+            for name in (
+                cls._collect_properties(current_nodes.get(path, {})) - cls._collect_properties(node)
+            )
+        }
+
+        def exempt(path):
+            return "if" in path.strip("/").split("/") or any(
+                path == prefix or path.startswith(f"{prefix}/")
+                for prefix in [
+                    *(f"/$defs/{name}" for name in unreachable),
+                    *unreachable_properties,
+                ]
+            )
+
+        for path, old_node in old_nodes.items():
+            current_node = current_nodes.get(path)
+            if current_node is None or exempt(path):
+                continue
+            old_props = cls._collect_properties(old_node)
+            new_props = cls._collect_properties(current_node)
+            removed = old_props - new_props
+            if removed:
+                breaking_changes.append(f"{schema_name}{path}: removed properties: {removed}")
+
+            finite_old = cls._finite_values(old_node)
+            if finite_old is not None or cls._finite_values(current_node) is not None:
+                restrictions = cls._value_restrictions(
+                    old_node, current_node, old_schema, current_schema
+                )
+            else:
+                restrictions = []
+            for restriction in restrictions:
+                breaking_changes.append(f"{schema_name}{path}: {restriction}")
+
+            old_extra = old_node.get("additionalProperties", True)
+            new_extra = current_node.get("additionalProperties", True)
+            old_type = old_node.get("type")
+            object_possible = (
+                old_type is None
+                or old_type == "object"
+                or (isinstance(old_type, list) and "object" in old_type)
+            )
+            compare_open_object = finite_old is None and object_possible
+            if compare_open_object and old_extra != new_extra:
+                for restriction in cls._value_restrictions(
+                    old_extra, new_extra, old_schema, current_schema
+                ):
+                    breaking_changes.append(
+                        f"{schema_name}{path}/additionalProperties: {restriction}"
+                    )
+            # A newly declared optional property is additive only when old
+            # artifacts could not carry it, or its old value domain is retained.
+            for name in sorted(new_props - old_props) if compare_open_object else []:
+                if old_extra is False and not old_node.get("patternProperties"):
+                    continue
+                if old_node.get("patternProperties"):
+                    if not cls._value_restrictions(
+                        True, current_node["properties"][name], old_schema, current_schema
+                    ):
+                        continue
+                    breaking_changes.append(
+                        f"{schema_name}{path}/properties/{name}: review required: "
+                        "old patternProperties may constrain this newly declared property"
+                    )
+                    continue
+                for restriction in cls._value_restrictions(
+                    old_extra, current_node["properties"][name], old_schema, current_schema
+                ):
+                    breaking_changes.append(f"{schema_name}{path}/properties/{name}: {restriction}")
+
+            new_req = cls._collect_required(current_node) - cls._collect_required(old_node)
+            if new_req:
+                breaking_changes.append(f"{schema_name}{path}: new required fields: {new_req}")
+
+        old_conds = cls._collect_conditional_required(old_schema)
+        new_conds = cls._collect_conditional_required(current_schema)
+        for pointer, fields in sorted(new_conds - old_conds):
+            if exempt(pointer):
+                continue
+            if cls._anyof_satisfied_by_old_required(current_schema, old_schema, pointer):
+                continue
+            breaking_changes.append(
+                f"{schema_name}{pointer}: new conditional requirement: {fields} "
+                "(artifacts not satisfying it become invalid)"
+            )
+        return breaking_changes
+
+    @staticmethod
+    def _fail_on_breaking_changes(breaking_changes: list):
+        """Use the same consumer-visible verdict for focused cases and the tag gate."""
+        if breaking_changes:
+            msg = "Breaking schema changes detected — requires MAJOR version bump and new tag:\n"
+            for change in breaking_changes:
+                msg += f"  - {change}\n"
+            pytest.fail(msg)
+
     @pytest.mark.skipif(
         os.getenv("CONTRACTS_ALLOW_BREAKING") == "1",
         reason="Skipped when CONTRACTS_ALLOW_BREAKING=1",
     )
     def test_no_breaking_changes_vs_previous_tag(self):
-        """Detect breaking schema changes: property removal, enum shrinkage, new required fields.
+        """Detect restrictions or review-required changes versus the previous tag.
 
         Breaking changes (require MAJOR version bump):
         - Removing a property from a 'properties' object
         - Removing a value from an 'enum' array
         - Adding a new field to 'required'
+        - Introducing enum/const restrictions or changing allowed const values
+        - Restricting additionalProperties or newly declaring constrained properties on open objects
 
         Allowed (MINOR/PATCH):
-        - Adding properties
+        - Adding optional properties to closed objects (or preserving their old value domain)
         - Adding enum values
         - Removing from required
         - Documentation changes
@@ -273,197 +453,239 @@ class TestBreakingChangeDetection:
             # Load current schema
             current_schema = json.loads(schema_file.read_text(encoding="utf-8"))
 
-            # Walk both and compare
-            old_nodes = {path: node for path, node in self._walk_schema(old_schema, [])}
-            current_nodes = {path: node for path, node in self._walk_schema(current_schema, [])}
+            breaking_changes.extend(
+                self._compare_schemas(old_schema, current_schema, schema_file.name)
+            )
 
-            for path, old_node in old_nodes.items():
-                current_node = current_nodes.get(path)
-                if not current_node:
-                    continue
-
-                # Check: removed properties
-                old_props = self._collect_properties(old_node)
-                new_props = self._collect_properties(current_node)
-                removed = old_props - new_props
-                if removed:
-                    breaking_changes.append(
-                        f"{schema_file.name}{path}: removed properties: {removed}"
-                    )
-
-                # Check: removed enum values
-                old_enum = self._collect_enum_values(old_node)
-                new_enum = self._collect_enum_values(current_node)
-                if old_enum and new_enum:
-                    removed_enum = old_enum - new_enum
-                    if removed_enum:
-                        breaking_changes.append(
-                            f"{schema_file.name}{path}: removed enum values: {removed_enum}"
-                        )
-
-                # Check: new required fields
-                old_required = self._collect_required(old_node)
-                new_required = self._collect_required(current_node)
-                new_req = new_required - old_required
-                if new_req:
-                    breaking_changes.append(
-                        f"{schema_file.name}{path}: new required fields: {new_req}"
-                    )
-
-            # Check: newly introduced conditional requirements (if/then, allOf, oneOf,
-            # dependentRequired). Node-by-node comparison above only sees paths present
-            # in BOTH versions, so a brand-new conditional rule slips past it — yet a
-            # conditional `required` rejects artifacts just as hard as a root one.
-            old_conds = self._collect_conditional_required(old_schema)
-            new_conds = self._collect_conditional_required(current_schema)
-            # A conditional inside a $def that no OLD artifact could reach cannot
-            # invalidate one. Without this, adding any new optional sub-object
-            # with an internal if/then reads as a MAJOR break.
-            unreachable = self._defs_reachable_only_via_new_properties(current_schema, old_schema)
-            for pointer, fields in sorted(new_conds - old_conds):
-                if any(pointer.startswith(f"/$defs/{name}/") for name in unreachable):
-                    continue
-                if self._anyof_satisfied_by_old_required(current_schema, old_schema, pointer):
-                    continue
-                breaking_changes.append(
-                    f"{schema_file.name}{pointer}: new conditional requirement: {fields} "
-                    "(artifacts not satisfying it become invalid)"
-                )
-
-        if breaking_changes:
-            msg = "Breaking schema changes detected — requires MAJOR version bump and new tag:\n"
-            for change in breaking_changes:
-                msg += f"  - {change}\n"
-            pytest.fail(msg)
+        self._fail_on_breaking_changes(breaking_changes)
 
 
-class TestConditionalReachability:
-    """The narrowing in `_defs_reachable_only_via_new_properties` must exempt
-    ONLY conditionals no old artifact could reach. These tests exist so the
-    exemption cannot quietly grow into "conditionals are fine".
-    """
+class TestCompatibilityVerdicts:
+    """Real old-valid instances must not silently become invalid at the CI gate."""
 
     H = TestBreakingChangeDetection
 
-    OLD: ClassVar[dict] = {
-        "type": "object",
-        "properties": {"kept": {"$ref": "#/$defs/kept"}},
-        "$defs": {"kept": {"type": "object", "properties": {"a": {"type": "string"}}}},
-    }
+    @classmethod
+    def _reject(cls, old, current, value):
+        Draft202012Validator(old).validate(value)
+        assert not Draft202012Validator(current).is_valid(value)
+        with pytest.raises(pytest.fail.Exception):
+            cls.H._fail_on_breaking_changes(cls.H._compare_schemas(old, current, "case.json"))
 
-    def test_new_def_behind_a_new_property_is_exempt(self):
-        """The 5a case: new optional property -> new def -> internal if/then."""
+    @classmethod
+    def _accept(cls, old, current, value):
+        Draft202012Validator(old).validate(value)
+        Draft202012Validator(current).validate(value)
+        cls.H._fail_on_breaking_changes(cls.H._compare_schemas(old, current, "case.json"))
+
+    @pytest.mark.parametrize(
+        ("old", "current", "value"),
+        [
+            ({"type": "string"}, {"type": "string", "enum": ["canonical"]}, "historical"),
+            ({"enum": ["old", "kept"]}, {"enum": ["kept"]}, "old"),
+            ({"enum": ["old"]}, {"enum": []}, "old"),
+            ({"const": ["old", "kept"]}, {"const": ["kept", "old"]}, ["old", "kept"]),
+            ({"const": {"class": ["old"]}}, {"const": {"class": ["new"]}}, {"class": ["old"]}),
+            ({"enum": [True, 1]}, {"enum": [1]}, True),
+            ({"type": "object"}, {"type": "object", "additionalProperties": False}, {"extra": 1}),
+            (
+                {"type": "object"},
+                {"type": "object", "additionalProperties": {"type": "string"}},
+                {"extra": 42},
+            ),
+            (
+                {"type": "object", "additionalProperties": {"type": "string"}},
+                {"type": "object", "additionalProperties": {"type": "string", "enum": ["new"]}},
+                {"extra": "historical"},
+            ),
+            (
+                {"type": "object"},
+                {"type": "object", "properties": {"fresh": {"type": "string"}}},
+                {"fresh": 42},
+            ),
+            (
+                {"type": "object", "additionalProperties": {"enum": ["old", "kept"]}},
+                {"type": "object", "properties": {"fresh": {"enum": ["kept"]}}},
+                {"fresh": "old"},
+            ),
+            (
+                {"type": "object", "properties": {"kept": {"type": "string"}}},
+                {"type": "object", "properties": {}, "additionalProperties": False},
+                {"kept": "historical"},
+            ),
+            (
+                {"type": "object"},
+                {"type": "object", "required": ["new"]},
+                {},
+            ),
+            (
+                {"type": "object"},
+                {"type": "object", "allOf": [{"if": {}, "then": {"required": ["new"]}}]},
+                {},
+            ),
+        ],
+        ids=[
+            "first-enum",
+            "enum-shrink",
+            "empty-enum",
+            "const-list-order",
+            "const-object",
+            "boolean-not-number",
+            "open-to-closed",
+            "typed-additional",
+            "constrained-additional",
+            "typed-new-property",
+            "finite-extra-new-property",
+            "removed-property",
+            "new-required",
+            "new-conditional",
+        ],
+    )
+    def test_restrictions_fail_gate(self, old, current, value):
+        self._reject(old, current, value)
+
+    @pytest.mark.parametrize(
+        ("old", "current", "value"),
+        [
+            ({"enum": ["old"]}, {"enum": ["old", "new"]}, "old"),
+            ({"const": ["old"]}, {"enum": [["old"], ["new"]]}, ["old"]),
+            ({"const": ["old"]}, {"anyOf": [{"const": ["old"]}, {"const": ["new"]}]}, ["old"]),
+            ({"const": {"a": 1, "b": [2]}}, {"const": {"b": [2.0], "a": 1.0}}, {"a": 1, "b": [2]}),
+            (
+                {"type": "object", "additionalProperties": False},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"fresh": {"type": "string"}},
+                },
+                {},
+            ),
+            (
+                {"type": "object", "additionalProperties": {"type": "string"}},
+                {"type": "object", "properties": {"fresh": {"type": "string"}}},
+                {"fresh": "historical"},
+            ),
+            ({"type": "object"}, {"type": "object", "properties": {"fresh": {}}}, {"fresh": 42}),
+            ({"type": "object"}, {"type": "object", "additionalProperties": {}}, {"extra": 42}),
+            (
+                {"type": "object", "required": ["kept"]},
+                {"type": "object", "required": []},
+                {"kept": 42},
+            ),
+            (
+                {"type": "object"},
+                {"type": "object", "$defs": {"write": {"enum": ["new"], "required": ["new"]}}},
+                {"historical": 42},
+            ),
+        ],
+        ids=[
+            "enum-expansion",
+            "const-to-enum",
+            "const-to-anyof",
+            "json-equivalence",
+            "optional-closed-property",
+            "retained-extra-domain",
+            "unrestricted-new-property",
+            "explicit-open-equivalence",
+            "removed-required",
+            "unreferenced-write-fragment",
+        ],
+    )
+    def test_additive_changes_pass_gate(self, old, current, value):
+        self._accept(old, current, value)
+
+    def test_optional_inline_conditional_on_closed_object_is_additive(self):
+        old = {"type": "object", "additionalProperties": False}
         current = {
-            "type": "object",
+            **old,
             "properties": {
-                "kept": {"$ref": "#/$defs/kept"},
-                "fresh": {"type": "array", "items": {"$ref": "#/$defs/fresh"}},
-            },
-            "$defs": {
-                "kept": self.OLD["$defs"]["kept"],
-                "fresh": {
-                    "type": "object",
-                    "allOf": [{"if": {}, "then": {"required": ["x"]}}],
-                },
+                "fresh": {"type": "object", "allOf": [{"if": {}, "then": {"required": ["x"]}}]}
             },
         }
-        assert "fresh" in self.H._defs_reachable_only_via_new_properties(current, self.OLD)
+        self._accept(old, current, {})
 
-    def test_new_def_swapped_in_behind_a_PRE_EXISTING_property_is_not_exempt(self):
-        """The unsound case: an existing property's $ref now points at a new def.
+    def test_finite_object_domain_is_not_mistaken_for_open_values(self):
+        old = {"type": "object", "const": {"historical": 42}}
+        current = {**old, "properties": {"fresh": {"type": "string"}}}
+        self._accept(old, current, {"historical": 42})
 
-        Old artifacts already carry `kept`, so they are immediately subject to
-        the new def's conditional. No new property stands between them and it.
-        """
+    def test_object_only_keywords_cannot_narrow_an_old_string(self):
+        old = {"type": "string"}
+        current = {
+            **old,
+            "additionalProperties": False,
+            "properties": {"fresh": {"type": "string"}},
+        }
+        self._accept(old, current, "historical")
+
+    @pytest.mark.parametrize("closed", [False, True], ids=["open", "closed"])
+    def test_new_def_conditional_respects_old_parent_openness(self, closed):
+        old = {"type": "object", "additionalProperties": not closed}
         current = {
             "type": "object",
-            "properties": {"kept": {"$ref": "#/$defs/newkept"}},
-            "$defs": {
-                "kept": self.OLD["$defs"]["kept"],
-                "newkept": {
-                    "type": "object",
-                    "properties": {"a": {"type": "string"}},
-                    "allOf": [{"if": {}, "then": {"required": ["a"]}}],
-                },
-            },
+            "additionalProperties": not closed,
+            "properties": {"fresh": {"$ref": "#/$defs/fresh"}},
+            "$defs": {"fresh": {"type": "object", "allOf": [{"required": ["x"]}]}},
         }
-        assert "newkept" not in self.H._defs_reachable_only_via_new_properties(current, self.OLD)
+        if closed:
+            self._accept(old, current, {})
+        else:
+            self._reject(old, current, {"fresh": {}})
 
-    def test_new_def_behind_a_new_property_of_an_existing_def_is_exempt(self):
-        """Chains may START at an old property: what matters is crossing a new one.
-
-        `kept` is pre-existing, but the only route to `sneaky` is the NEW
-        property `b`, and an old artifact cannot carry `b` under
-        additionalProperties: false.
-        """
-        current = {
+    @pytest.mark.parametrize("route", ["existing", "nested-closed", "shared"])
+    def test_referenced_def_requirements_respect_old_reachability(self, route):
+        kept = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "additionalProperties": False,
+        }
+        old = {
             "type": "object",
             "properties": {"kept": {"$ref": "#/$defs/kept"}},
-            "$defs": {
-                "kept": {
-                    "type": "object",
-                    "properties": {"a": {"type": "string"}, "b": {"$ref": "#/$defs/sneaky"}},
+            "$defs": {"kept": kept},
+        }
+        restrictive = {"type": "object", "allOf": [{"required": ["a"]}]}
+        if route == "nested-closed":
+            current = {
+                **old,
+                "$defs": {
+                    "kept": {
+                        **kept,
+                        "properties": {**kept["properties"], "b": {"$ref": "#/$defs/new"}},
+                    },
+                    "new": restrictive,
                 },
-                "sneaky": {"type": "object", "allOf": [{"if": {}, "then": {"required": ["x"]}}]},
-            },
-        }
-        assert "sneaky" in self.H._defs_reachable_only_via_new_properties(current, self.OLD)
+            }
+            self._accept(old, current, {"kept": {}})
+        else:
+            properties = {"kept": {"$ref": "#/$defs/new"}}
+            if route == "shared":
+                properties["fresh"] = {"$ref": "#/$defs/new"}
+            current = {
+                **old,
+                "properties": properties,
+                "$defs": {**old["$defs"], "new": restrictive},
+            }
+            self._reject(old, current, {"kept": {}})
 
-    def test_conditional_added_to_an_existing_def_is_never_exempt(self):
-        """The case the gate exists for: tightening a def old artifacts use."""
-        current = {
-            "type": "object",
-            "properties": {"kept": {"$ref": "#/$defs/kept"}},
-            "$defs": {
-                "kept": {
-                    "type": "object",
-                    "properties": {"a": {"type": "string"}},
-                    "allOf": [{"if": {}, "then": {"required": ["a"]}}],
-                }
-            },
-        }
-        assert not self.H._defs_reachable_only_via_new_properties(current, self.OLD)
-        conds = self.H._collect_conditional_required(current)
-        assert conds - self.H._collect_conditional_required(self.OLD)
-
-    def test_def_reachable_by_both_a_new_and_an_old_path_is_not_exempt(self):
-        """All chains must be new; one pre-existing route is enough to disqualify."""
-        current = {
-            "type": "object",
-            "properties": {
-                "kept": {"$ref": "#/$defs/shared"},
-                "fresh": {"$ref": "#/$defs/shared"},
-            },
-            "$defs": {
-                "kept": self.OLD["$defs"]["kept"],
-                "shared": {"type": "object", "allOf": [{"if": {}, "then": {"required": ["x"]}}]},
-            },
-        }
-        assert "shared" not in self.H._defs_reachable_only_via_new_properties(current, self.OLD)
-
-
-class TestAnyOfAlternatives:
-    """The anyOf narrowing must exempt only alternatives an old artifact already meets."""
-
-    H = TestBreakingChangeDetection
-    OLD: ClassVar[dict] = {"$defs": {"t": {"type": "object", "required": ["a", "b", "c"]}}}
-
-    def _new(self, branches, key="anyOf"):
-        return {"$defs": {"t": {"type": "object", "required": ["a"], key: branches}}}
-
-    def test_new_alternative_to_old_requirements_is_not_breaking(self):
-        new = self._new([{"required": ["x"]}, {"required": ["b", "c"]}])
-        for i in (0, 1):
-            assert self.H._anyof_satisfied_by_old_required(new, self.OLD, f"/$defs/t/anyOf/{i}")
-
-    def test_alternatives_old_artifacts_do_not_meet_stay_breaking(self):
-        new = self._new([{"required": ["x"]}, {"required": ["b", "y"]}])
-        assert not self.H._anyof_satisfied_by_old_required(new, self.OLD, "/$defs/t/anyOf/0")
-
-    def test_oneof_is_never_exempt(self):
-        new = self._new([{"required": ["x"]}, {"required": ["b", "c"]}], key="oneOf")
-        assert not self.H._anyof_satisfied_by_old_required(new, self.OLD, "/$defs/t/oneOf/0")
-
-    def test_branches_with_more_than_required_are_not_exempt(self):
-        new = self._new([{"required": ["x"], "properties": {}}, {"required": ["b"]}])
-        assert not self.H._anyof_satisfied_by_old_required(new, self.OLD, "/$defs/t/anyOf/1")
+    @pytest.mark.parametrize(
+        ("key", "branches", "breaking"),
+        [
+            ("anyOf", [{"required": ["x"]}, {"required": ["b", "c"]}], False),
+            ("anyOf", [{"required": ["x"]}, {"required": ["b", "y"]}], True),
+            ("oneOf", [{"required": ["b"]}, {"required": ["c"]}], True),
+            (
+                "anyOf",
+                [{"required": ["x"]}, {"required": ["b"], "properties": {"b": {"type": "string"}}}],
+                True,
+            ),
+        ],
+    )
+    def test_conditional_alternatives_keep_existing_guards(self, key, branches, breaking):
+        old = {"type": "object", "required": ["a", "b", "c"]}
+        current = {"type": "object", "required": ["a"], key: branches}
+        value = {"a": 1, "b": 2, "c": 3}
+        if breaking:
+            self._reject(old, current, value)
+        else:
+            self._accept(old, current, value)

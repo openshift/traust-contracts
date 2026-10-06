@@ -256,3 +256,105 @@ def test_every_findings_schema_declares_the_identity_fields():
         "finding-shaped objects missing an identity field; a stamped corpus "
         f"would be invalid against them: {missing}"
     )
+
+
+def _canonical_write_validator(family: str, canonical: bool = False) -> Draft202012Validator:
+    schema = json.loads((SCHEMA_DIR / f"{family}.schema.json").read_text(encoding="utf-8"))
+    if canonical:
+        namespace = "definitions" if family == "pqc-decision-tree" else "$defs"
+        schema = {"$ref": f"{schema['$id']}#/{namespace}/canonical_write"}
+    return Draft202012Validator(schema, registry=build_registry())
+
+
+def test_canonical_write_roadmap_separates_historical_text_from_canonical_writes():
+    from storage_samples import sample
+
+    document = json.loads(sample("report")[0])
+    roadmap = document["remediation_roadmap"][0]
+    roadmap.update(priority="owner sequencing note", effort="depends on provider response")
+    reader = _canonical_write_validator("report")
+    writer = _canonical_write_validator("report", canonical=True)
+    reader.validate(document)
+    assert not writer.is_valid(document)
+
+    for priority in ("p0", "p1", "p2", "p3", "p4"):
+        roadmap.update(priority=priority, effort="m", blocked_external=False)
+        writer.validate(document)
+    for size in ("xs", "s", "m", "l", "xl"):
+        for blocked in (False, True):
+            roadmap.update(effort=size, blocked_external=blocked)
+            writer.validate(document)
+    roadmap["priority"] = "p5"
+    assert not writer.is_valid(document)
+    roadmap["priority"] = "p2"
+    roadmap["effort"] = "blocked-external"
+    reader.validate(document)
+    assert not writer.is_valid(document)
+    roadmap["effort"] = "m"
+    roadmap["blocked_external"] = "true"
+    assert not writer.is_valid(document)
+
+
+@pytest.mark.parametrize("family", ["pqc-blockers", "pqc-readiness"])
+def test_canonical_write_open_historical_properties_are_not_retroactively_boolean(family):
+    from storage_samples import sample
+
+    document = json.loads(sample(family)[0])
+    if family == "pqc-blockers":
+        item = document["remediation_roadmap"][0]
+        item.update(priority="p2", effort={"provider_note": "historical extra"})
+    else:
+        item = {"fact_ids": [], "primitive": "RSA", "disallowed_after": 2035}
+        document["clock_items"] = [item]
+    item["blocked_external"] = "historical provider note"
+    reader = _canonical_write_validator(family)
+    writer = _canonical_write_validator(family, canonical=True)
+    reader.validate(document)
+    assert not writer.is_valid(document)
+    item["blocked_external"] = True
+    item["effort" if family == "pqc-blockers" else "remediation_effort"] = "s"
+    writer.validate(document)
+
+
+def test_canonical_write_decision_classes_preserve_exact_history_and_size_requiredness():
+    from storage_samples import sample
+
+    document = json.loads(sample("pqc-decision-tree")[0])
+    reader = _canonical_write_validator("pqc-decision-tree")
+    writer = _canonical_write_validator("pqc-decision-tree", canonical=True)
+    reader.validate(document)
+    assert not writer.is_valid(document)
+    legacy_classes = document["remediation_effort"]["classes"]
+    document["remediation_effort"]["classes"] = ["xs", "s", "m", "l", "xl"]
+    for rule in document["remediation_effort"]["rules"]:
+        rule.update(effort="m", blocked_external=True)
+    writer.validate(document)
+    document["remediation_effort"]["classes"] += legacy_classes
+    assert not reader.is_valid(document)
+    document["remediation_effort"]["classes"] = ["xs", "s", "m", "l", "xl"]
+    del document["remediation_effort"]["rules"][0]["effort"]
+    assert not writer.is_valid(document)
+    assert not reader.is_valid(document)
+
+
+def test_canonical_write_mitigation_keeps_uppercase_history_and_requires_known_size():
+    from storage_samples import sample
+
+    document = json.loads(sample("threat-model")[0])
+    item = {
+        "mitigation": "Verify authorization",
+        "threat_ids": ["T1"],
+        "closes_class": "partial",
+        "effort": "S",
+        "blocked_external": True,
+    }
+    document["mitigations"] = [item]
+    reader = _canonical_write_validator("threat-model")
+    writer = _canonical_write_validator("threat-model", canonical=True)
+    reader.validate(document)
+    assert not writer.is_valid(document)
+    item["effort"] = "s"
+    writer.validate(document)
+    del item["effort"]
+    assert not writer.is_valid(document)
+    assert not reader.is_valid(document)

@@ -75,6 +75,19 @@
         }
       },
       "additionalProperties": false
+    },
+    "canonical_write": {
+      "description": "Opt-in contract for findings returned by scanner adapters.",
+      "allOf": [
+        { "$ref": "#" },
+        {
+          "properties": {
+            "findings": {
+              "items": { "$ref": "report.schema.json#/$defs/canonical_finding" }
+            }
+          }
+        }
+      ]
     }
   }
 }

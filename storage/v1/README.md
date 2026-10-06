@@ -161,6 +161,12 @@ So, when adding or reviewing a view:
 `test_view_contract_coverage.py` enforces 1–2 mechanically, in both
 dialects.
 
+`report_finding.blocked_external` is a nullable INTEGER on both dialects:
+1 means explicitly blocked, 0 explicitly not blocked, and NULL means no flag
+was stated. It is independent of `remediation_effort`. A historical
+`blocked-external` effort string is retained as written and does not cause a
+flag or a size to be inferred. The owning report's JSON remains intact.
+
 ## Storage profiles
 
 [`profiles.json`](profiles.json) is the hand-authored context/projection policy.
@@ -237,6 +243,12 @@ storage-internal integrity. Cross-artifact domain references remain soft.
 
 Earlier experimental schemas were never published or used and have no migration
 contract. Recreate those databases rather than treating them as storage v1.
+
+Storage revision 3 adds the nullable blocking column.
+`init()` stamps fresh databases and rejects an older revision before altering
+its schema or rows. No automatic or live database migration is included here;
+an existing store requires separately reviewed operator provisioning.
+Historical reports and events remain schema-readable without rewriting them.
 
 ## Checks
 

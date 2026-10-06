@@ -484,9 +484,18 @@
             "trivial",
             "moderate",
             "significant",
-            "blocked-external"
+            "blocked-external",
+            "xs",
+            "s",
+            "m",
+            "l",
+            "xl"
           ],
-          "$comment": "Optional (harness >= 0.84.0): effort class derived deterministically from provenance x agility per the pqc-readiness decision tree (plan v1.3 section 4.5). Currently only emitted alongside pqc_classification."
+          "$comment": "Legacy effort labels remain valid for historical artifacts. Sizes xs–xl are added; canonical_write rejects legacy labels without inventing a size mapping. Blocking is independent."
+        },
+        "blocked_external": {
+          "type": "boolean",
+          "description": "An external dependency blocks this item; independent of effort size."
         },
         "isolation_dimensions": {
           "type": "array",
@@ -923,6 +932,9 @@
         },
         "effort": {
           "type": "string"
+        },
+        "blocked_external": {
+          "type": "boolean"
         }
       }
     },
@@ -1120,6 +1132,49 @@
           "description": "Finding(s) the fact was promoted into; absent for dismissals."
         }
       }
+    },
+    "effort": {
+      "type": "string",
+      "enum": ["xs", "s", "m", "l", "xl"],
+      "description": "Ordered effort-size labels; no duration thresholds are defined."
+    },
+    "roadmap_priority": {
+      "type": "string",
+      "enum": ["p0", "p1", "p2", "p3", "p4"],
+      "description": "Priority labels in numeric order; no urgency or deadline mapping is defined."
+    },
+    "canonical_finding": {
+      "allOf": [
+        { "$ref": "#/$defs/finding" },
+        {
+          "properties": {
+            "remediation_effort": { "$ref": "#/$defs/effort" },
+            "blocked_external": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "canonical_write": {
+      "description": "Opt-in known-size write contract. Default historical validation is unchanged.",
+      "allOf": [
+        { "$ref": "#" },
+        {
+          "properties": {
+            "findings": {
+              "items": { "$ref": "#/$defs/canonical_finding" }
+            },
+            "remediation_roadmap": {
+              "items": {
+                "properties": {
+                  "priority": { "$ref": "#/$defs/roadmap_priority" },
+                  "effort": { "$ref": "#/$defs/effort" },
+                  "blocked_external": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "allOf": [
