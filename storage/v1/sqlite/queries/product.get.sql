@@ -1,3 +1,3 @@
-SELECT product_id
+SELECT id
 FROM product
 WHERE slug = :slug;

@@ -10,12 +10,7 @@ from storage_samples import encode, sample
 from traust_contracts.v1.storage import Binding, Store
 
 POSTGRES_DSN = "postgresql://traust:traust-test-only@127.0.0.1:5432/traust_test"
-POSTGRES_SETUP = (
-    "Run:\n  podman run --name traust-postgres --rm -d "
-    "-e POSTGRES_USER=traust -e POSTGRES_PASSWORD=traust-test-only "
-    "-e POSTGRES_DB=traust_test -p 127.0.0.1:5432:5432 "
-    "-v traust-postgres-data:/var/lib/postgresql/data docker.io/library/postgres:16"
-)
+POSTGRES_SETUP = "Run `make db-setup` to ensure the shared container and traust_test exist"
 
 
 def skip_postgres(reason: str) -> Never:
@@ -37,7 +32,7 @@ def postgres_dsn() -> str:
         with psycopg.connect(POSTGRES_DSN, connect_timeout=2):
             pass
     except psycopg.OperationalError:
-        skip_postgres("local database is unavailable")
+        skip_postgres("traust_test is unavailable")
     return POSTGRES_DSN
 
 

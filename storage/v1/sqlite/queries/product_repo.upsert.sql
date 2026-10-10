@@ -1,5 +1,4 @@
 INSERT INTO product_repo (
-    product_repo_id,
     product_id,
     repo_id,
     ref,
@@ -8,7 +7,6 @@ INSERT INTO product_repo (
     registered_at
 )
 VALUES (
-    :product_repo_id,
     :product_id,
     :repo_id,
     :ref,
