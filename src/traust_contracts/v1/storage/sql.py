@@ -11,10 +11,11 @@ from traust_contracts.v1.sql import bootstrap_statements as bootstrap_statements
 
 CONTRACT_VERSION = "v1"
 #: Storage schema revision, stamped in traust_storage_meta and checked on
-#: open. Normally bumped on DDL changes. Pre-stable identity correction keeps
-#: v1 revision 1; Store.init/migrate must also check the catalog shape.
-#: 1: baseline (0.50.0), then generated numeric root IDs (0.51.0).
-#: Existing TEXT-ID databases require reviewed manual conversion, not migrate().
+#: open. Bump it whenever the DDL changes, so a database created under an
+#: older schema is refused instead of failing on its first read or write.
+#: 1: baseline (0.50.0). Rebaselined: the registry, report_finding.blocked_external
+#: and every earlier change are part of revision 1. Databases created under any
+#: earlier schema are recreated, not migrated.
 #: Each later step adds migrations/NNN_to_NNN+1.sql; Store.migrate() runs them.
 REVISION = 1
 

@@ -60,10 +60,8 @@ rejects mismatches and never upgrades an existing database automatically.
 ## CI pipeline
 
 PostgreSQL storage tests use `traust:traust-test-only@127.0.0.1:5432/traust_test`.
-Run `make db-setup` to start/reuse the shared container and create that test
-database if missing; after testing, `make db-teardown` drops only `traust_test`.
-Neither target touches `traust_migration`. Tests warn and skip when the database
-or `psycopg` is unavailable.
+Start with `podman pull docker.io/library/postgres:16`, then run the image with those values.
+Tests warn and skip when the database or `psycopg` is unavailable.
 
 **PR:** lint → conventional commits → release-ready → tests
 

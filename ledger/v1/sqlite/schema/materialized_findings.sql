@@ -1,5 +1,5 @@
 CREATE TABLE materialized_findings (
-    layer_id INTEGER NOT NULL REFERENCES layers(id),
+    layer_id VARCHAR NOT NULL,
     finding_ref VARCHAR NOT NULL,
     fingerprint VARCHAR,
     orphan BOOLEAN,

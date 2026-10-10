@@ -127,15 +127,12 @@ erDiagram
 
 | Table | Primary key | Natural key (unique) |
 |---|---|---|
-| `product` | `id` | `slug` |
-| `repo` | `id` | `repo_url` (exact string) |
-| `product_repo` | `id` | `(product_id, repo_id, ref)`; `ref` is `''` for the default branch |
+| `product` | `product_id` | `slug` |
+| `repo` | `repo_id` | `repo_url` (exact string) |
+| `product_repo` | `product_repo_id` | `(product_id, repo_id, ref)`; `ref` is `''` for the default branch |
 
-Primary keys are database-generated numeric identifiers (`BIGINT GENERATED ALWAYS AS
-IDENTITY` in PostgreSQL, `INTEGER PRIMARY KEY` in SQLite); the database
-enforces uniqueness on the natural keys. Child FKs retain descriptive names
-(`product_id`, `repo_id`, `product_repo_id`) and reference the parent `id`.
-`Store.register_product`,
+Primary keys are database identifiers (UUIDs the Store assigns); the database
+enforces uniqueness on the natural keys. `Store.register_product`,
 `register_repo` and `register_product_repo` insert or refresh by natural key
 and return the stored id, so registering twice returns the same id.
 `find_product_repo(slug, repo_url, ref)` looks one up without creating it.
@@ -182,13 +179,11 @@ index keeps the chain linear. A newer findings-current must supersede the
 current one. Baseline audits are not constrained.
 
 **Ledger layers reference the product_repo.** `traust_ledger.layers.product_repo_id`
-is a non-null foreign key to `product_repo(id)`, unique: every
-DB layer has an owner, with at most one layer per product_repo. Storage is
-always present when a database is used and the ledger is optional, so the
-ledger depends on storage and never the reverse: both share one database,
-with storage initialized first. `layers.id` is a separate DB-generated
-numeric key; file-backed layer names and storage binding `layer_id` source
-labels remain text and are not silently rehashed.
+is a foreign key to `product_repo(product_repo_id)`, unique when set: one layer
+per product_repo. Storage is always present when a database is used and the
+ledger is optional, so the ledger depends on storage and never the reverse:
+the ledger's database backend must share the database with storage, and
+storage must be initialized first. `layer_id` stays independent of it.
 Join storage and ledger on `artifact_binding.product_repo_id =
 layers.product_repo_id`, then `report_finding.finding_id = events.finding_ref`.
 
@@ -331,43 +326,12 @@ storage-internal integrity. Cross-artifact domain references remain soft.
 
 ## Compatibility
 
-**Pre-stable correction, not v2:** the relational roots were changed in the
-*authored* v1 revision-1 DDL without bumping the database revision. Package
-0.51.0 differs from the earlier 0.50.0 revision-1 shape; a revision stamp
-alone cannot prove compatibility. `Store.init()` and `Store.migrate()` now
-reject old TEXT registry columns even if stamped `v1` / `1`.
-Database Ledger adopters must also call
-`traust_contracts.v1.ledger.assert_identity_shape(conn, dialect)` on an
-existing schema before serving writes. Neither check converts data.
-
-**Manual conversion on an isolated copy, with owner sign-off before rollout:**
-
-1. Freeze writes and snapshot both `traust_storage` and `traust_ledger` in the
-   **same database**. Record table counts, natural-key duplicates, all owner
-   FKs, binding IDs, authored event `id`/`event_id`/`seq`/payload bytes, and
-   Merkle roots/signatures. Stop if a layer has no unambiguous product_repo
-   owner; never choose the first matching URL or mint a replacement layer.
-2. Build a reviewed **old ID → new ID crosswalk** for product by `slug`, repo
-   by exact `repo_url`, product_repo by `(old product_id, old repo_id, ref)`,
-   and layer by the *approved* product_repo ownership map. Keep the old path
-   layer names as historical aliases. Abort on any non-bijective mapping.
-3. On the copy only, create corrected tables and load roots **without supplying
-   numeric IDs**; use natural-key joins to record the DB-returned IDs in the
-   crosswalk. Rebuild all child FKs through it, including inventory children,
-   binding owner links, Ledger events and materialized findings. Preserve
-   `binding_id`, evidence digest, authored event `id` (PostgreSQL identity
-   override for explicit historical values), event bytes/order, and signed
-   metadata; reset the event ID sequence above the imported maximum.
-4. Compare before/after counts and cryptographic outputs, run FK and uniqueness
-   checks and verify **every** historical signature. If signature verification
-   depends on the old textual layer PK, stop: do not rewrite or re-sign signed
-   history. Retain the crosswalk for auditing and roll back the copy on any
-   mismatch. Only an approved conversion script plus staging proof may touch
-   an existing database; `Store.migrate()` is not a revision-1 converter.
-
-This is a conversion protocol, **not** a ready-to-run migration: existing
-revision-1 databases remain incompatible until the per-database ownership
-map, staging verification and manual SQL are reviewed.
+Storage and ledger were **rebaselined to revision 1 in 0.50.0**: the registry,
+`report_finding.blocked_external` and every earlier change are part of the
+revision-1 schema. Databases created before 0.50.0 (any stamped revision) are
+recreated, not migrated -- an older database stamped revision 1 would pass the
+revision check with the wrong shape, so do not reuse one. Historical reports
+and events remain schema-readable; re-ingest them into the new database.
 
 ## Migrations
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 
@@ -16,7 +17,7 @@ from traust_contracts.v1.storage import Binding, IngestError, Store, binding_id
 from traust_contracts.v1.storage.sql import REVISION
 
 ACM_CLI = "https://github.com/stolostron/acm-cli"
-UNREGISTERED = 999_999_999
+UNREGISTERED = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.fixture
@@ -28,13 +29,13 @@ def store() -> Iterator[Store]:
     conn.close()
 
 
-def register(store: Store, product: str = "rhacm", ref: str = "") -> int:
+def register(store: Store, product: str = "rhacm", ref: str = "") -> str:
     return store.register_product_repo(
         store.register_product(product), store.register_repo(ACM_CLI), ref
     )
 
 
-def report_binding(product_repo_id: int, role: str = "cumulative", **kwargs: str) -> Binding:
+def report_binding(product_repo_id: str, role: str = "cumulative", **kwargs: str) -> Binding:
     return Binding(
         subject_id="findings/rhacm/acm-cli",
         run_id="corpus:run:findings/rhacm/acm-cli",
@@ -52,10 +53,10 @@ def report_binding(product_repo_id: int, role: str = "cumulative", **kwargs: str
         lambda store: store.register_product("bad\x00slug"),
         lambda store: store.register_repo("https://example.test/\x00"),
         lambda store: store.register_product_repo("", "r"),
-        lambda store: store.register_product_repo(1, 1, None),
+        lambda store: store.register_product_repo("p", "r", None),
     ],
 )
-def test_registration_rejects_empty_and_nul(store: Store, call: Callable[[Store], int]) -> None:
+def test_registration_rejects_empty_and_nul(store: Store, call: Callable[[Store], str]) -> None:
     with pytest.raises(IngestError):
         call(store)
 
@@ -67,85 +68,21 @@ def test_product_repo_is_not_part_of_binding_identity() -> None:
     assert binding_id(digest, "report", roled) == (
         "d0da85a98aa803d79ba2fed07a8f991c706f2fbb44f3692cbd3ad8662961cb0b"
     )
-    owned = replace(roled, product_repo_id=42, commit_sha="a" * 40)
+    owned = replace(roled, product_repo_id=str(uuid.uuid4()), commit_sha="a" * 40)
     assert binding_id(digest, "report", owned) == binding_id(digest, "report", roled)
 
 
 def test_registration_is_idempotent_and_returns_stored_ids(store: Store) -> None:
     first = register(store)
     assert register(store) == first
-    assert isinstance(first, int) and first > 0
+    assert str(uuid.UUID(first)) == first
     product = store.register_product("rhacm")
     repo = store.register_repo(ACM_CLI)
     assert store.conn.execute(
-        "SELECT product_id, repo_id FROM product_repo WHERE id = ?", (first,)
+        "SELECT product_id, repo_id FROM product_repo WHERE product_repo_id = ?", (first,)
     ).fetchone() == (product, repo)
     for table in REGISTRY_TABLES:
         assert store.conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (1,)
-
-
-def test_registry_catalog_enforces_parent_and_child_keys(store: Store) -> None:
-    conn = store.conn
-    for table, natural in (
-        ("product", ("slug",)),
-        ("repo", ("repo_url",)),
-        ("product_repo", ("product_id", "repo_id", "ref")),
-    ):
-        assert any(
-            row[1] == "id" and row[2].upper() == "INTEGER" and row[5] == 1
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        )
-        assert any(
-            index[2]
-            and tuple(row[2] for row in conn.execute(f"PRAGMA index_info({index[1]})")) == natural
-            for index in conn.execute(f"PRAGMA index_list({table})")
-        )
-    expected_fks = {
-        "product_repo": {("product_id", "product", "id"), ("repo_id", "repo", "id")},
-        "artifact_binding": {("product_repo_id", "product_repo", "id")},
-        "product_repo_version": {("product_repo_id", "product_repo", "id")},
-        "repo_owner": {("product_repo_id", "product_repo", "id")},
-    }
-    for table, required in expected_fks.items():
-        actual = {
-            (row[3], row[2], row[4]) for row in conn.execute(f"PRAGMA foreign_key_list({table})")
-        }
-        assert required <= actual, table
-    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-
-
-def test_v1_stamp_cannot_hide_legacy_text_ids() -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE traust_storage_meta (id INTEGER PRIMARY KEY, contract_version TEXT, "
-        "revision INTEGER, applied_at TEXT)"
-    )
-    conn.execute("INSERT INTO traust_storage_meta VALUES (1, 'v1', 1, 'now')")
-    conn.execute("CREATE TABLE product (product_id TEXT PRIMARY KEY, slug TEXT UNIQUE)")
-    conn.commit()
-    for open_store in (Store(conn).init, Store(conn).migrate):
-        with pytest.raises(IngestError, match="manual conversion required"):
-            open_store()
-    assert conn.execute("SELECT product_id FROM product").fetchall() == []
-    assert conn.execute("SELECT revision FROM traust_storage_meta").fetchone() == (1,)
-    conn.close()
-
-
-def test_v1_stamp_cannot_hide_old_primary_key_name() -> None:
-    conn = sqlite3.connect(":memory:")
-    Store(conn).init()
-    conn.execute("ALTER TABLE product RENAME COLUMN id TO product_id")
-    conn.commit()
-    with pytest.raises(IngestError, match="manual conversion required"):
-        Store(conn).init()
-    assert conn.execute("SELECT revision FROM traust_storage_meta").fetchone() == (1,)
-    conn.close()
-
-
-def test_register_rejects_caller_selected_ids(store: Store) -> None:
-    for value in ("1", 0, -1, True):
-        with pytest.raises(IngestError, match="positive database ID"):
-            store.register_product_repo(value, value)  # type: ignore[arg-type]
 
 
 def test_one_repo_many_products(store: Store) -> None:
@@ -169,12 +106,12 @@ def test_product_repo_key_is_product_repo_and_ref(store: Store) -> None:
     assert default != release
     product, repo = store.register_product("rhacm"), store.register_repo(ACM_CLI)
     assert store.conn.execute(
-        "SELECT product_id, repo_id, ref, id FROM product_repo ORDER BY ref"
+        "SELECT product_id, repo_id, ref, product_repo_id FROM product_repo ORDER BY ref"
     ).fetchall() == [(product, repo, "", default), (product, repo, "release-5.0", release)]
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
         store.conn.execute(
-            "INSERT INTO product_repo (product_id, repo_id, ref, registered_at) "
-            "VALUES (?, ?, '', 'now')",
+            "INSERT INTO product_repo (product_repo_id, product_id, repo_id, ref, registered_at) "
+            "VALUES ('other-id', ?, ?, '', 'now')",
             (product, repo),
         )
     store.conn.rollback()
@@ -215,7 +152,7 @@ def test_inventory_attributes_refresh_identity_does_not(store: Store) -> None:
     owner = store.register_product_repo(product, repo, sub_service="acm", resource_type="upstream")
     store.register_product_repo(product, repo, sub_service="acm-cli", resource_type="adhoc")
     assert store.conn.execute(
-        "SELECT id, sub_service, resource_type FROM product_repo"
+        "SELECT product_repo_id, sub_service, resource_type FROM product_repo"
     ).fetchall() == [(owner, "acm-cli", "adhoc")]
 
 
@@ -269,13 +206,13 @@ def test_inventory_answers_release_contents_and_coverage(store: Store) -> None:
     store.ingest("report", payload, report_binding(scanned, role="baseline"))
     shipped = store.conn.execute(
         "SELECT r.repo_url FROM product_repo_version v "
-        "JOIN product_repo pr ON pr.id = v.product_repo_id "
-        "JOIN repo r ON r.id = pr.repo_id WHERE v.version = '4.21' ORDER BY 1"
+        "JOIN product_repo pr ON pr.product_repo_id = v.product_repo_id "
+        "JOIN repo r ON r.repo_id = pr.repo_id WHERE v.version = '4.21' ORDER BY 1"
     ).fetchall()
     assert shipped == [("https://github.com/o/r",), (ACM_CLI,)]
     never_scanned = store.conn.execute(
-        "SELECT pr.id FROM product_repo pr WHERE NOT EXISTS "
-        "(SELECT 1 FROM artifact_binding b WHERE b.product_repo_id = pr.id)"
+        "SELECT pr.product_repo_id FROM product_repo pr WHERE NOT EXISTS "
+        "(SELECT 1 FROM artifact_binding b WHERE b.product_repo_id = pr.product_repo_id)"
     ).fetchall()
     assert never_scanned == [(unscanned,)]
 

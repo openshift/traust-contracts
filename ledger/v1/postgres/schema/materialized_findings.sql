@@ -1,5 +1,5 @@
 CREATE TABLE traust_ledger.materialized_findings (
-    layer_id BIGINT NOT NULL REFERENCES traust_ledger.layers(id),
+    layer_id VARCHAR NOT NULL,
     finding_ref VARCHAR NOT NULL,
     fingerprint VARCHAR,
     orphan BOOLEAN,

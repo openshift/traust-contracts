@@ -211,24 +211,20 @@ no automatic or live database migration.
 
 ```bash
 make setup    # uv sync + enable .githooks
-make test     # SQLite + schema tests; PG tests included when traust_test is available
+make test     # SQLite + schema tests; PG tests included when db-up
 ```
 
 PostgreSQL e2e:
 
 ```bash
-make db-setup     # start/reuse shared container; create traust_test if absent
-make test         # includes PG storage + ledger schema tests
-make db-teardown  # drop only traust_test; do not stop the shared container
+make db-up    # start local Postgres container
+make test     # includes PG storage + ledger schema tests
+make db-down
 ```
 
 `tests/test_compat.py` gates breaking JSON Schema changes against the previous tag.
 PostgreSQL tests run automatically when `psycopg` and the database are available;
-otherwise they skip. `make db-up` aliases `db-setup`; `make db-down` stops the
-shared container and also interrupts migration work, so it is **not** the test
-teardown command. Neither `db-setup` nor `db-teardown` changes
-`traust_migration`. `db-teardown` fails rather than forcing active connections
-closed; rerun `db-setup` to recreate the test database.
+otherwise they skip.
 
 ## License
 

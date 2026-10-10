@@ -6,9 +6,8 @@ DOCS_DIR ?= ../traust/docs
 DB_CONTAINER := traust-postgres
 DB_IMAGE := docker.io/library/postgres:16
 DB_PORT := 5432
-DB_TEST_NAME := traust_test
 
-.PHONY: help setup sync hooks lint lint-fix test storage-check db-up db-down db-setup db-teardown check-release status bump docs $(BUMP_PARTS) \
+.PHONY: help setup sync hooks lint lint-fix test storage-check db-up db-down check-release status bump docs $(BUMP_PARTS) \
 	downstream-status downstream-bump-ledger downstream-bump-engine downstream-bump-traust \
 	downstream-chain downstream-chain-push downstream-chain-pr downstream-reconcile
 
@@ -20,10 +19,8 @@ help:
 	@echo "  make lint           — ruff check + format --check"
 	@echo "  make lint-fix       — ruff check --fix + format"
 	@echo "  make test           — pytest tests (database e2e included when db-up)"
-	@echo "  make db-setup       — start/reuse shared container, ensure traust_test exists"
-	@echo "  make db-teardown    — drop traust_test only (leave container and migration DB)"
-	@echo "  make db-up          — alias for db-setup"
-	@echo "  make db-down        — stop shared container (also affects migration)"
+	@echo "  make db-up          — start local database container for e2e tests"
+	@echo "  make db-down        — stop and remove the database container"
 	@echo "  make check-release  — VERSION + CHANGELOG gate for current branch vs main"
 	@echo "  make status         — current version, tag, git state"
 	@echo "  make bump patch|minor|major — bump VERSION + pyproject.toml"
@@ -63,44 +60,24 @@ storage-check:
 test:
 	uv run pytest tests/ -q
 
-db-up: db-setup
-
-db-setup:
-	@if podman ps --format '{{.Names}}' | grep -Fxq '$(DB_CONTAINER)'; then \
+db-up:
+	@if podman container exists $(DB_CONTAINER) 2>/dev/null; then \
 		echo "$(DB_CONTAINER) already running"; \
-	elif podman container exists $(DB_CONTAINER) 2>/dev/null; then \
-		podman start $(DB_CONTAINER); \
 	else \
 		podman run --name $(DB_CONTAINER) --rm -d \
 			-e POSTGRES_USER=traust \
 			-e POSTGRES_PASSWORD=traust-test-only \
-			-e POSTGRES_DB=$(DB_TEST_NAME) \
+			-e POSTGRES_DB=traust_test \
 			-p 127.0.0.1:$(DB_PORT):5432 \
 			-v traust-postgres-data:/var/lib/postgresql/data \
 			$(DB_IMAGE); \
+		echo "waiting for database..."; \
+		for i in $$(seq 1 30); do \
+			podman exec $(DB_CONTAINER) pg_isready -U traust -q 2>/dev/null && break; \
+			sleep 1; \
+		done; \
+		echo "$(DB_CONTAINER) ready on port $(DB_PORT)"; \
 	fi
-	@ready=0; for i in $$(seq 1 30); do \
-		if podman exec $(DB_CONTAINER) pg_isready -U traust -d postgres -q 2>/dev/null; then \
-			ready=1; break; \
-		fi; \
-		sleep 1; \
-	done; \
-	if [ "$$ready" -ne 1 ]; then echo "$(DB_CONTAINER) not ready" >&2; exit 1; fi
-	@if podman exec $(DB_CONTAINER) psql -X -U traust -d postgres -Atq \
-		-c "SELECT 1 FROM pg_database WHERE datname = '$(DB_TEST_NAME)'" | grep -qx 1; then \
-		echo "$(DB_TEST_NAME) already exists"; \
-	else \
-		podman exec $(DB_CONTAINER) createdb -U traust -O traust $(DB_TEST_NAME); \
-	fi
-	@podman exec $(DB_CONTAINER) psql -X -U traust -d $(DB_TEST_NAME) -Atq -c 'SELECT 1' | grep -qx 1
-	@echo "$(DB_TEST_NAME) ready on port $(DB_PORT)"
-
-db-teardown:
-	@if ! podman ps --format '{{.Names}}' | grep -Fxq '$(DB_CONTAINER)'; then \
-		echo "$(DB_CONTAINER) is not running; cannot tear down $(DB_TEST_NAME)" >&2; exit 1; \
-	fi
-	@podman exec $(DB_CONTAINER) dropdb -U traust --maintenance-db=postgres --if-exists $(DB_TEST_NAME)
-	@echo "removed $(DB_TEST_NAME); shared container and traust_migration unchanged"
 
 db-down:
 	@podman stop $(DB_CONTAINER) 2>/dev/null || true

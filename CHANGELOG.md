@@ -2,27 +2,6 @@
 
 All notable changes to traust-contracts are documented here.
 
-## [0.51.0]
-
-### Changed — pre-stable v1 revision-1 identity correction
-
-- Database-generated numeric `id` primary keys on `product`, `repo`,
-  `product_repo`, and database Ledger `layers` replace caller-selected TEXT IDs.
-  Child references retain descriptive names (`product_id`, `repo_id`,
-  `product_repo_id`, `layer_id`) and point to their parent `id`. Registry upserts
-  omit IDs, return integers and retain natural unique keys; typed FKs propagate
-  to Storage children and Ledger events/projections. Ledger database layers now
-  require one registered `product_repo_id` (unique per owner).
-- Authored **v1 revision 1** remains unchanged as a revision number: this is
-  the explicitly approved pre-stable exception, not v2 or an automatic upgrade.
-  Same-stamp old schemas are rejected by Storage's catalog checks and Ledger's
-  `assert_identity_shape` preflight; existing databases need a separately
-  reviewed manual old→new conversion on a copy, with signed-history proof.
-  No production conversion or downstream pins are included in this change.
-- Evidence digests, deterministic `binding_id`, authored event IDs and file
-  layer names remain their own identities. See `storage/v1/README.md` for
-  conversion stop conditions and audit requirements.
-
 ## [0.50.0]
 
 ### Added

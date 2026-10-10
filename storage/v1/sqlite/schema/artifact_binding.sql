@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS artifact_binding (
     layer_id TEXT,
     supersedes_binding_id TEXT,
     bound_at TEXT NOT NULL,
-    product_repo_id INTEGER REFERENCES product_repo(id),
+    product_repo_id TEXT REFERENCES product_repo(product_repo_id),
     commit_sha TEXT,
     PRIMARY KEY (binding_id),
     UNIQUE (binding_id, artifact_digest)

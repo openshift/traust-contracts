@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -314,7 +315,7 @@ class Binding:
     #: The registered product_repo that owns this artifact (a foreign key, so it
     #: must exist). Not part of the binding identity; must match across a
     #: supersession.
-    product_repo_id: int | None = None
+    product_repo_id: str | None = None
     #: The commit the artifact describes. A fact about the run: not part of the
     #: binding identity and free to change across a supersession.
     commit_sha: str | None = None
@@ -558,12 +559,6 @@ def _text(field: str, value: str | None, required: bool = False) -> str | None:
     return value
 
 
-def _registry_id(field: str, value: int) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise IngestError(f"{field}: expected a positive database ID")
-    return value
-
-
 def _text_list(field: str, values: Sequence[str] | None) -> str | None:
     """Encode a list of text attributes as a JSON array; None or empty stays NULL."""
     if values is None:
@@ -714,7 +709,6 @@ class Store:
                 for path in bootstrap_files(self.dialect):
                     self._run_file(path)
                 self._stamp()
-            self._assert_identity_shape()
             self.conn.execute("COMMIT")
         except Exception as error:
             rollback_error = self._rollback()
@@ -739,7 +733,6 @@ class Store:
                 for path in files:
                     self._run_file(path)
                 self._stamp()
-                self._assert_identity_shape()
                 self.conn.execute("COMMIT")
                 return 0
             version, revision = row[0], row[1]
@@ -762,56 +755,11 @@ class Store:
                 for path in files:
                     self._run_file(path)
                 self._stamp()
-            self._assert_identity_shape()
             self.conn.execute("COMMIT")
             return revision
         except Exception as error:
             rollback_error = self._rollback()
             raise IngestError(f"storage migrate: {_error_detail(error)}{rollback_error}") from None
-
-    def _assert_identity_shape(self) -> None:
-        """The revision-1 stamp alone cannot distinguish the former TEXT IDs."""
-        columns = {
-            "product": ("id",),
-            "repo": ("id",),
-            "product_repo": ("id", "product_id", "repo_id"),
-            "artifact_binding": ("product_repo_id",),
-            "product_repo_version": ("product_repo_id",),
-            "repo_owner": ("product_repo_id",),
-        }
-        roots = {"product", "repo", "product_repo"}
-        for table, names in columns.items():
-            if self.dialect == "sqlite":
-                shape = {
-                    row[1]: (row[2].upper(), row[5])
-                    for row in self._execute(f"PRAGMA table_info({table})").fetchall()
-                }
-                valid = all(
-                    name in shape
-                    and shape[name][0] == "INTEGER"
-                    and (table not in roots or name != "id" or shape[name][1] == 1)
-                    for name in names
-                )
-            else:
-                shape = {
-                    row[0]: (row[1], row[2])
-                    for row in self._execute(
-                        "SELECT column_name, data_type, is_identity "
-                        "FROM information_schema.columns "
-                        "WHERE table_schema = 'traust_storage' AND table_name = %(table)s",
-                        {"table": table},
-                    ).fetchall()
-                }
-                valid = all(
-                    shape.get(name)
-                    == ("bigint", "YES" if table in roots and name == "id" else "NO")
-                    for name in names
-                )
-            if not valid:
-                raise IngestError(
-                    f"{table}: incompatible v1 revision-1 identity columns; "
-                    "reviewed manual conversion required"
-                )
 
     def _meta_row(self) -> tuple[Any, ...] | None:
         if self.dialect == "postgres":
@@ -877,7 +825,7 @@ class Store:
                 f"storage binding read: {_error_detail(error)}{rollback_error}"
             ) from None
 
-    def register_product(self, slug: str, segment: str | None = None) -> int:
+    def register_product(self, slug: str, segment: str | None = None) -> str:
         """Register a product by slug, idempotently; return its product_id.
 
         ``segment`` is a descriptive inventory attribute: re-registering sets it.
@@ -888,7 +836,7 @@ class Store:
             ("slug",),
         )
 
-    def register_repo(self, repo_url: str) -> int:
+    def register_repo(self, repo_url: str) -> str:
         """Register a repo by exact repo_url, idempotently; return its repo_id."""
         return self._register(
             "repo", {"repo_url": _text("repo_url", repo_url, required=True)}, ("repo_url",)
@@ -896,12 +844,12 @@ class Store:
 
     def register_product_repo(
         self,
-        product_id: int,
-        repo_id: int,
+        product_id: str,
+        repo_id: str,
         ref: str = "",
         sub_service: str | None = None,
         resource_type: str | None = None,
-    ) -> int:
+    ) -> str:
         """Register a repo as a product ships it (ref '' = default branch); return its id.
 
         Product and repo must be registered. ``sub_service`` and ``resource_type``
@@ -912,8 +860,8 @@ class Store:
         return self._register(
             "product_repo",
             {
-                "product_id": _registry_id("product_id", product_id),
-                "repo_id": _registry_id("repo_id", repo_id),
+                "product_id": _text("product_id", product_id, required=True),
+                "repo_id": _text("repo_id", repo_id, required=True),
                 "ref": _text("ref", ref),
                 "sub_service": _text("sub_service", sub_service),
                 "resource_type": _text("resource_type", resource_type),
@@ -921,7 +869,7 @@ class Store:
             ("product_id", "repo_id", "ref"),
         )
 
-    def find_product_repo(self, slug: str, repo_url: str, ref: str = "") -> int | None:
+    def find_product_repo(self, slug: str, repo_url: str, ref: str = "") -> str | None:
         """Return the product_repo_id for (product slug, repo_url, ref), or None.
 
         Reads only: unlike ``register_product_repo`` it never creates rows, so a
@@ -944,7 +892,7 @@ class Store:
 
     def register_product_repo_version(
         self,
-        product_repo_id: int,
+        product_repo_id: str,
         version: str,
         category: str | None = None,
         cluster_operators: Sequence[str] | None = None,
@@ -954,7 +902,7 @@ class Store:
         self._write(
             "product_repo_version",
             {
-                "product_repo_id": _registry_id("product_repo_id", product_repo_id),
+                "product_repo_id": product_repo_id,
                 "version": _text("version", version, required=True),
                 "category": _text("category", category),
                 "cluster_operators": _text_list("cluster_operators", cluster_operators),
@@ -964,7 +912,7 @@ class Store:
 
     def register_repo_owner(
         self,
-        product_repo_id: int,
+        product_repo_id: str,
         team: str,
         manager: str | None = None,
         individuals: Sequence[str] | None = None,
@@ -976,7 +924,7 @@ class Store:
         self._write(
             "repo_owner",
             {
-                "product_repo_id": _registry_id("product_repo_id", product_repo_id),
+                "product_repo_id": product_repo_id,
                 "team": _text("team", team, required=True),
                 "manager": _text("manager", manager),
                 "individuals": _text_list("individuals", individuals),
@@ -986,16 +934,16 @@ class Store:
             },
         )
 
-    def _register(self, table: str, values: dict[str, SQLValue], key: tuple[str, ...]) -> int:
-        """Insert or refresh a registry row by its natural key; return the DB-assigned id."""
-        stored = self._write(table, values, key)
-        if not isinstance(stored, int) or isinstance(stored, bool):
+    def _register(self, table: str, values: dict[str, str | None], key: tuple[str, ...]) -> str:
+        """Insert or refresh a registry row by its natural key; return the stored id."""
+        stored = self._write(table, {f"{table}_id": str(uuid.uuid4()), **values}, key)
+        if stored is None:
             raise IngestError(f"register {table}: row not found after upsert")
         return stored
 
     def _write(
-        self, table: str, values: dict[str, SQLValue], key: tuple[str, ...] = ()
-    ) -> int | None:
+        self, table: str, values: dict[str, str | None], key: tuple[str, ...] = ()
+    ) -> str | None:
         """Upsert one row on its natural key; with ``key``, read back and return its id."""
         self._idle()
         self._begin()
@@ -1374,13 +1322,12 @@ class Store:
             "layer_id",
             "supersedes_binding_id",
             "role",
+            "product_repo_id",
             "commit_sha",
         ):
             value = getattr(binding, field)
             if value is not None:
                 _identifier_bytes(field, value)
-        if binding.product_repo_id is not None:
-            _registry_id("product_repo_id", binding.product_repo_id)
         roles = storage_profiles()[artifact].get("roles", [])
         if binding.role is not None and binding.role not in roles:
             allowed = ", ".join(roles) if roles else "none"
