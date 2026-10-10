@@ -2,6 +2,17 @@
 
 All notable changes to traust-contracts are documented here.
 
+## [0.52.0]
+
+### Reverted — generated numeric identity (0.51.0)
+
+- Reverts 0.51.0 (#37): `product`, `repo`, `product_repo` and database Ledger
+  `layers` return to caller-selected TEXT IDs (`layers.layer_id` primary key,
+  nullable `product_repo_id` unique when set). Schema content equals 0.50.0.
+- Same v1 revision-1 stamp as 0.51.0: databases bootstrapped by 0.51.0 keep the
+  numeric shape and are **not** converted. Recreate them (dev/test) before use.
+- Numeric identity is backlogged, not abandoned.
+
 ## [0.51.0]
 
 ### Changed — pre-stable v1 revision-1 identity correction

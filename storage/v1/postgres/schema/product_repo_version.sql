@@ -3,7 +3,7 @@
 -- row: category, cluster operators and images are attributes of that
 -- shipment, not entities. Refreshed on each inventory load.
 CREATE TABLE IF NOT EXISTS traust_storage.product_repo_version (
-    product_repo_id BIGINT NOT NULL REFERENCES traust_storage.product_repo(id),
+    product_repo_id TEXT NOT NULL REFERENCES traust_storage.product_repo(product_repo_id),
     version TEXT NOT NULL CHECK (version <> ''),
     category TEXT,
     cluster_operators JSONB,

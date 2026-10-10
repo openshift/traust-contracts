@@ -1,6 +1,6 @@
 CREATE TABLE events (
     id INTEGER NOT NULL,
-    layer_id INTEGER NOT NULL,
+    layer_id VARCHAR NOT NULL,
     seq INTEGER NOT NULL,
     event_id VARCHAR NOT NULL,
     finding_ref VARCHAR,
@@ -22,7 +22,7 @@ CREATE TABLE events (
     CONSTRAINT ck_ledger_events_event_id_nonempty CHECK (event_id <> ''),
     CONSTRAINT uq_ledger_events_layer_seq UNIQUE (layer_id, seq),
     CONSTRAINT uq_ledger_events_layer_event_id UNIQUE (layer_id, event_id),
-    FOREIGN KEY (layer_id) REFERENCES layers(id) ON DELETE RESTRICT
+    FOREIGN KEY (layer_id) REFERENCES layers(layer_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_ledger_events_clock ON events (fingerprint, occurred_at);
