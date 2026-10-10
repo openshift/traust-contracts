@@ -16,6 +16,7 @@ from traust_contracts.v1.ledger import (
     POSTGRES_SCHEMA,
     REVISION,
     TABLE_ORDER,
+    assert_identity_shape,
     bootstrap_files,
     bootstrap_statements,
     migration_files,
@@ -36,20 +37,20 @@ def _ledger_on_storage(ledger_sql: dict[str, str] | None = None) -> sqlite3.Conn
     return connection
 
 
-def _product_repo(connection: sqlite3.Connection, product: str = "rhacm") -> str:
+def _product_repo(connection: sqlite3.Connection, product: str = "rhacm") -> int:
     store = Store(connection)
     return store.register_product_repo(
         store.register_product(product), store.register_repo(ACM_CLI)
     )
 
 
-def _layer(connection: sqlite3.Connection, layer_id: str, product_repo_id: str | None) -> None:
-    connection.execute(
-        "INSERT INTO layers (layer_id, metadata_payload, needs_review_payload, "
+def _layer(connection: sqlite3.Connection, product_repo_id: int | None) -> int:
+    return connection.execute(
+        "INSERT INTO layers (metadata_payload, needs_review_payload, "
         "extensions_payload, root_keys_payload, product_repo_id) "
-        "VALUES (?, x'00', x'00', x'00', x'00', ?)",
-        (layer_id, product_repo_id),
-    )
+        "VALUES (x'00', x'00', x'00', x'00', ?) RETURNING id",
+        (product_repo_id,),
+    ).fetchone()[0]
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "sqlite"])
@@ -82,6 +83,7 @@ def test_sqlite_bootstrap_metadata_and_relations() -> None:
             )
         }
         assert set(TABLES) <= relations
+        assert_identity_shape(connection, "sqlite")
         connection.execute(
             "INSERT INTO schema_revision VALUES (:id, :contract_version, :revision, :applied_at)",
             {
@@ -107,6 +109,15 @@ def test_sqlite_bootstrap_metadata_and_relations() -> None:
             )
 
 
+def test_same_revision_stamp_rejects_legacy_ledger_shape() -> None:
+    legacy = "CREATE TABLE layers (layer_id VARCHAR PRIMARY KEY, product_repo_id TEXT)"
+    with contextlib.closing(_ledger_on_storage({"layers": legacy})) as connection:
+        connection.execute("INSERT INTO schema_revision VALUES (1, 'v1', 1, 'now')")
+        with pytest.raises(ValueError, match="manual conversion required"):
+            assert_identity_shape(connection, "sqlite")
+        assert connection.execute("SELECT revision FROM schema_revision").fetchone() == (1,)
+
+
 def test_sqlite_append_only_guards() -> None:
     """Verify that bootstrapped schema installs append-only triggers."""
     with contextlib.closing(_ledger_on_storage()) as conn:
@@ -120,13 +131,11 @@ def test_sqlite_append_only_guards() -> None:
         assert "events_validate_append" in triggers
         assert "layers_reject_delete" in triggers
         # insert valid data
-        conn.execute(
-            "INSERT INTO layers (layer_id, metadata_payload, needs_review_payload, "
-            "extensions_payload, root_keys_payload) VALUES ('L1', x'00', x'00', x'00', x'00')"
-        )
+        layer_id = _layer(conn, _product_repo(conn))
         conn.execute(
             "INSERT INTO events (layer_id, seq, event_id, event_payload) "
-            "VALUES ('L1', 0, 'e0', x'AA')"
+            "VALUES (?, 0, 'e0', x'AA')",
+            (layer_id,),
         )
         # UPDATE on events must fail
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -136,30 +145,47 @@ def test_sqlite_append_only_guards() -> None:
             conn.execute("DELETE FROM events WHERE event_id = 'e0'")
         # DELETE on layers must fail
         with pytest.raises(sqlite3.IntegrityError, match="cannot be deleted"):
-            conn.execute("DELETE FROM layers WHERE layer_id = 'L1'")
+            conn.execute("DELETE FROM layers WHERE id = ?", (layer_id,))
         # out-of-order seq must fail
         with pytest.raises(sqlite3.IntegrityError, match="append at the next sequence"):
             conn.execute(
                 "INSERT INTO events (layer_id, seq, event_id, event_payload) "
-                "VALUES ('L1', 5, 'e5', x'CC')"
+                "VALUES (?, 5, 'e5', x'CC')",
+                (layer_id,),
             )
 
 
 def test_layers_reference_a_registered_product_repo() -> None:
     with contextlib.closing(_ledger_on_storage()) as conn:
         owner = _product_repo(conn)
-        _layer(conn, "L1", owner)
+        layer_id = _layer(conn, owner)
+        assert isinstance(layer_id, int)
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
-            _layer(conn, "L2", "0" * 64)
+            _layer(conn, 999_999_999)
         with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
-            _layer(conn, "L3", owner)
-        _layer(conn, "legacy-1", None)
-        _layer(conn, "legacy-2", None)
+            _layer(conn, owner)
+        with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+            _layer(conn, None)
         joined = conn.execute(
-            "SELECT l.layer_id, pr.ref FROM layers l "
-            "JOIN product_repo pr ON pr.product_repo_id = l.product_repo_id"
+            "SELECT l.id, pr.ref FROM layers l JOIN product_repo pr ON pr.id = l.product_repo_id"
         ).fetchall()
-        assert joined == [("L1", "")]
+        assert joined == [(layer_id, "")]
+        for table, column, parent in (
+            ("layers", "product_repo_id", "product_repo"),
+            ("events", "layer_id", "layers"),
+            ("materialized_findings", "layer_id", "layers"),
+        ):
+            assert any(
+                row[2:5] == (parent, column, "id")
+                for row in conn.execute(f"PRAGMA foreign_key_list({table})")
+            ), table
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            conn.execute(
+                "INSERT INTO materialized_findings "
+                "(layer_id, finding_ref, validity, resolution, event_count) "
+                "VALUES (999999999, 'ref', 'valid', 'open', 0)"
+            )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_ledger_requires_storage_in_the_same_database() -> None:
@@ -169,7 +195,7 @@ def test_ledger_requires_storage_in_the_same_database() -> None:
             for statement in bootstrap_statements("sqlite", path):
                 conn.execute(statement)
         with pytest.raises(sqlite3.OperationalError, match="no such table"):
-            _layer(conn, "L1", None)
+            _layer(conn, 1)
 
 
 def test_postgres_layers_reference_storage_product_repo(postgres_dsn: str) -> None:
@@ -188,18 +214,37 @@ def test_postgres_layers_reference_storage_product_repo(postgres_dsn: str) -> No
                 store.register_product("rhacm"), store.register_repo(ACM_CLI)
             )
             insert = (
-                "INSERT INTO traust_ledger.layers (layer_id, metadata_payload, "
+                "INSERT INTO traust_ledger.layers (metadata_payload, "
                 "needs_review_payload, extensions_payload, root_keys_payload, product_repo_id) "
-                "VALUES (%s, '\\x00', '\\x00', '\\x00', '\\x00', %s)"
+                "VALUES ('\\x00', '\\x00', '\\x00', '\\x00', %s) RETURNING id"
             )
-            conn.execute(insert, ("L1", owner))
+            assert isinstance(conn.execute(insert, (owner,)).fetchone()[0], int)
+            assert_identity_shape(conn, "postgres")
             with pytest.raises(psycopg.errors.ForeignKeyViolation):
-                conn.execute(insert, ("L2", "0" * 64))
+                conn.execute(insert, (999_999_999,))
             with pytest.raises(psycopg.errors.UniqueViolation):
-                conn.execute(insert, ("L3", owner))
+                conn.execute(insert, (owner,))
+            with pytest.raises(psycopg.errors.NotNullViolation):
+                conn.execute(insert, (None,))
         finally:
             conn.execute("DROP SCHEMA IF EXISTS traust_ledger CASCADE")
             conn.execute("DROP SCHEMA IF EXISTS traust_storage CASCADE")
+
+
+def test_generated_ledger_ids_and_typed_references_in_authored_sql() -> None:
+    for dialect, id_type, fk_type in (
+        ("postgres", "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY", "BIGINT"),
+        ("sqlite", "INTEGER PRIMARY KEY", "INTEGER"),
+    ):
+        schema = ledger_dir() / dialect / "schema"
+        layers = (schema / "layers.sql").read_text()
+        assert f"id {id_type}" in layers
+        assert f"product_repo_id {fk_type} NOT NULL UNIQUE REFERENCES" in layers
+        assert "product_repo(id)" in layers
+        for table in ("events", "materialized_findings"):
+            child = (schema / f"{table}.sql").read_text()
+            assert f"layer_id {fk_type} NOT NULL" in child
+            assert "layers(id)" in child
 
 
 def test_postgres_sql_qualified_and_metadata_shape() -> None:

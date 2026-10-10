@@ -214,6 +214,29 @@ def test_view_output_columns_are_identical_across_dialects() -> None:
     assert sqlite_views["current_binding"] == ["*"]
 
 
+def test_generated_registry_ids_and_typed_foreign_keys_in_authored_sql() -> None:
+    for dialect, id_type, fk_type in (
+        ("postgres", "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY", "BIGINT"),
+        ("sqlite", "INTEGER PRIMARY KEY", "INTEGER"),
+    ):
+        schema = storage_dir() / dialect / "schema"
+        queries = storage_dir() / dialect / "queries"
+        for table in ("product", "repo", "product_repo"):
+            assert f"id {id_type}" in (schema / f"{table}.sql").read_text()
+            assert f"{table}_id" not in (queries / f"{table}.upsert.sql").read_text()
+        for table in ("product_repo", "artifact_binding", "product_repo_version", "repo_owner"):
+            ddl = (schema / f"{table}.sql").read_text()
+            for field in (
+                ("product_id", "repo_id") if table == "product_repo" else ("product_repo_id",)
+            ):
+                assert f"{field} {fk_type}" in ddl
+                parent = "product_repo" if field == "product_repo_id" else field.removesuffix("_id")
+                assert (
+                    f"REFERENCES {('traust_storage.' if dialect == 'postgres' else '')}{parent}(id)"
+                    in ddl
+                )
+
+
 def test_upsert_columns_match_the_table_definition() -> None:
     """An upsert that omits a column silently drops that data forever.
 
@@ -242,7 +265,9 @@ def test_upsert_columns_match_the_table_definition() -> None:
                     r"|TIMESTAMPTZ|REAL|DOUBLE|BYTEA|BLOB)\b",
                     line,
                 )
-                if match:
+                if match and not (
+                    table in ("product", "repo", "product_repo") and match.group(1) == "id"
+                ):
                     declared.append(match.group(1))
             insert = upsert_path.read_text(encoding="utf-8").split("(", 1)[1].split(")", 1)[0]
             inserted = [c.strip() for c in insert.split(",") if c.strip()]

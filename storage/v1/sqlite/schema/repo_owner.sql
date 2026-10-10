@@ -1,7 +1,7 @@
 -- Who owns a product_repo, from the owners.csv in each product's inventory
 -- folder. A product_repo can list several teams. Refreshed on each load.
 CREATE TABLE IF NOT EXISTS repo_owner (
-    product_repo_id TEXT NOT NULL REFERENCES product_repo(product_repo_id),
+    product_repo_id INTEGER NOT NULL REFERENCES product_repo(id),
     team TEXT NOT NULL CHECK (team <> ''),
     manager TEXT,
     individuals TEXT CHECK (individuals IS NULL OR json_valid(individuals)),

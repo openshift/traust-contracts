@@ -457,14 +457,14 @@ def test_postgres_projects_and_orders_owasp_ratings(database: tuple[Any, str]) -
     assert {row[-1] for row in exposure} == {"high", None}
 
 
-def _pg_registry_owner(store: Store, product: str = "rhacm") -> str:
+def _pg_registry_owner(store: Store, product: str = "rhacm") -> int:
     return store.register_product_repo(
         store.register_product(product),
         store.register_repo("https://github.com/stolostron/acm-cli"),
     )
 
 
-def _pg_cumulative(owner: str, supersedes: str | None = None) -> Binding:
+def _pg_cumulative(owner: int, supersedes: str | None = None) -> Binding:
     return Binding(
         subject_id="findings/rhacm/acm-cli",
         run_id="corpus:run:findings/rhacm/acm-cli",
@@ -479,12 +479,13 @@ def test_postgres_registry_foreign_keys(database: tuple[Any, str]) -> None:
     store = Store(conn)
     store.init()
     with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
-        store.register_product_repo("missing-product", "missing-repo")
+        store.register_product_repo(999_999_999, 999_999_999)
     payload, _ = sample("report")
     with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
-        store.ingest("report", payload, _pg_cumulative("missing-product-repo"))
+        store.ingest("report", payload, _pg_cumulative(999_999_999))
     owner = _pg_registry_owner(store)
     assert _pg_registry_owner(store) == owner
+    assert isinstance(owner, int)
     result = store.ingest("report", payload, _pg_cumulative(owner))
     assert store.get_binding(result.binding_id).binding.product_repo_id == owner
 
@@ -557,7 +558,7 @@ def test_postgres_migrate_bootstraps_empty_and_runs_a_step(
     assert _pg_shape(conn) == expected
     rows = conn.execute(
         "SELECT (SELECT revision FROM traust_storage_meta), "
-        "(SELECT count(*) FROM product_repo WHERE product_repo_id = %s)",
+        "(SELECT count(*) FROM product_repo WHERE id = %s)",
         (owner,),
     ).fetchone()
     conn.commit()
@@ -579,4 +580,4 @@ def test_postgres_inventory_tables(database: tuple[Any, str]) -> None:
     conn.commit()
     assert rows == [(["c"], ["x"])]
     with pytest.raises(IngestError, match=r"(?i)foreign_?key"):
-        store.register_repo_owner("0" * 64, "team")
+        store.register_repo_owner(999_999_999, "team")
